@@ -14,6 +14,7 @@ import networkx as nx
 
 from core.config import ConfigManager, DEFAULT_SYNTHESIS_MODEL
 from core.document_loader import SourceDocument
+from core.local_llm_client import is_local_model
 
 logger = logging.getLogger("OmniKnowledgeGraph")
 
@@ -37,26 +38,89 @@ Categorize each entity strictly into one of:
 - Concept (e.g., Quantum Entanglement, Thermal Throttling, Zero-Knowledge Proof)
 
 Format output strictly as valid JSON matching this schema:
-{
+{{
   "entities": [
-    {"name": "NASA", "category": "Organization", "description": "United States civilian space agency"},
-    {"name": "Artemis", "category": "Program", "description": "Lunar exploration initiative"}
+    {{"name": "NASA", "category": "Organization", "description": "United States civilian space agency"}},
+    {{"name": "Artemis", "category": "Program", "description": "Lunar exploration initiative"}}
   ],
   "relations": [
-    {
+    {{
       "source": "NASA",
       "target": "Artemis",
       "relation": "leads",
       "premise": "NASA directs the multinational Artemis lunar program"
-    }
+    }}
   ]
-}
+}}
 
 Document excerpt (Citation ID: [{cite_id}]):
 \"\"\"
 {text}
 \"\"\"
 """
+
+
+def clean_and_parse_json(raw_text: str) -> Dict[str, Any]:
+    """Clean and parse JSON from LLM output with markdown code fence stripping and regex fallback."""
+    if not raw_text or not raw_text.strip():
+        return {}
+
+    text = raw_text.strip()
+
+    # 1. Strip markdown code fences ```json ... ``` or ``` ... ```
+    match_fence = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
+    if match_fence:
+        text = match_fence.group(1).strip()
+
+    # 2. Try direct json.loads
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+
+    # 3. Find outermost JSON object {...}
+    match_braces = re.search(r"(\{[\s\S]*\})", text)
+    if match_braces:
+        try:
+            data = json.loads(match_braces.group(1))
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+
+    # 4. Fallback regex extraction for entities and relations
+    entities: List[Dict[str, Any]] = []
+    relations: List[Dict[str, Any]] = []
+
+    ent_pattern = re.compile(
+        r'\{[^{}]*?"name"\s*:\s*"([^"]+)"[^{}]*?"category"\s*:\s*"([^"]+)"(?:[^{}]*?"description"\s*:\s*"([^"]*)")?[^{}]*?\}',
+        re.DOTALL,
+    )
+    for m in ent_pattern.finditer(raw_text):
+        entities.append({
+            "name": m.group(1).strip(),
+            "category": m.group(2).strip(),
+            "description": (m.group(3) or "").strip(),
+        })
+
+    rel_pattern = re.compile(
+        r'\{[^{}]*?"source"\s*:\s*"([^"]+)"[^{}]*?"target"\s*:\s*"([^"]+)"[^{}]*?"relation"\s*:\s*"([^"]+)"(?:[^{}]*?"premise"\s*:\s*"([^"]*)")?[^{}]*?\}',
+        re.DOTALL,
+    )
+    for m in rel_pattern.finditer(raw_text):
+        relations.append({
+            "source": m.group(1).strip(),
+            "target": m.group(2).strip(),
+            "relation": m.group(3).strip(),
+            "premise": (m.group(4) or "").strip(),
+        })
+
+    if entities or relations:
+        return {"entities": entities, "relations": relations}
+
+    return {}
 
 
 class KnowledgeGraphEngine:
@@ -132,16 +196,15 @@ class KnowledgeGraphEngine:
         model_name: str = DEFAULT_SYNTHESIS_MODEL,
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """Extract entities and relations using LLM, with deterministic regex fallback."""
-        if not text.strip():
+        if not text or not text.strip():
             return [], []
 
         api_key = self.config_manager.get_api_key()
         if api_key and not is_local_model(model_name):
             try:
-                from google import genai
                 from google.genai import types
 
-                client = genai.Client(api_key=api_key)
+                client = self.config_manager.create_client(api_key=api_key)
                 sample_text = text[:4000]
                 prompt = ENTITY_EXTRACTION_PROMPT.format(text=sample_text, cite_id=cite_id)
 
@@ -151,29 +214,31 @@ class KnowledgeGraphEngine:
                     config=types.GenerateContentConfig(
                         temperature=0.0,
                         response_mime_type="application/json",
+                        http_options=types.HttpOptions(timeout=180000.0),
                     ),
                 )
                 raw_json = getattr(response, "text", "") or "{}"
-                data = json.loads(raw_json)
+                data = clean_and_parse_json(raw_json)
                 entities = data.get("entities", [])
                 relations = data.get("relations", [])
 
-                for e in entities:
-                    self.add_entity(
-                        name=e.get("name", ""),
-                        category=e.get("category", "Concept"),
-                        description=e.get("description", ""),
-                        cite_id=cite_id,
-                    )
-                for r in relations:
-                    self.add_relation(
-                        source_name=r.get("source", ""),
-                        target_name=r.get("target", ""),
-                        relation=r.get("relation", "connected_to"),
-                        premise=r.get("premise", ""),
-                        cite_id=cite_id,
-                    )
-                return entities, relations
+                if entities:
+                    for e in entities:
+                        self.add_entity(
+                            name=e.get("name", ""),
+                            category=e.get("category", "Concept"),
+                            description=e.get("description", ""),
+                            cite_id=cite_id,
+                        )
+                    for r in relations:
+                        self.add_relation(
+                            source_name=r.get("source", ""),
+                            target_name=r.get("target", ""),
+                            relation=r.get("relation", "connected_to"),
+                            premise=r.get("premise", ""),
+                            cite_id=cite_id,
+                        )
+                    return entities, relations
 
             except Exception as exc:
                 logger.warning(f"LLM entity extraction failed: {exc}. Using heuristic fallback.")
@@ -186,20 +251,28 @@ class KnowledgeGraphEngine:
         entities: List[Dict[str, Any]] = []
         relations: List[Dict[str, Any]] = []
 
-        # Known technical standards pattern (e.g. ISO-9001, IEEE 802.11, MIL-STD-810)
-        std_matches = set(re.findall(r"\b(?:ISO|IEEE|MIL-STD|DO|RFC|ECMA|ANSI)[-\s][\dA-Z.-]+\b", text))
+        # 1. Known technical standards pattern (e.g. ISO-9001, IEEE 802.11, MIL-STD-810)
+        std_matches = set(re.findall(r"\b(?:ISO|IEEE|MIL-STD|DO|RFC|ECMA|ANSI|NIST)[-\s][\dA-Z.-]+\b", text))
         for m in std_matches:
             self.add_entity(m, category="Standard", description="Technical standard specification", cite_id=cite_id)
             entities.append({"name": m, "category": "Standard"})
 
-        # Capitalized multi-word organization / program phrases
+        # 2. Capitalized multi-word organization / program phrases
         cap_phrases = set(re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}\b", text))
-        for p in list(cap_phrases)[:8]:
-            if any(stop in p.lower() for stop in ["this is", "the following", "in order", "furthermore", "according to"]):
+        for p in list(cap_phrases)[:12]:
+            if any(stop in p.lower() for stop in ["this is", "the following", "in order", "furthermore", "according to", "based on", "table of"]):
                 continue
-            cat = "Organization" if any(w in p for w in ["Lab", "Institute", "Corp", "Inc", "Agency", "Group", "Dept", "Force"]) else "Program"
+            cat = "Organization" if any(w in p for w in ["Lab", "Institute", "Corp", "Inc", "Agency", "Group", "Dept", "Force", "Consortium"]) else "Program"
             self.add_entity(p, category=cat, description=f"Entity identified in document [{cite_id}]", cite_id=cite_id)
             entities.append({"name": p, "category": cat})
+
+        # 3. Bold technical concepts in synthesis or notes: **Term**
+        bold_terms = set(re.findall(r"\*\*([A-Za-z0-9\s_-]{3,35})\*\*", text))
+        for b in list(bold_terms)[:10]:
+            clean_b = b.strip()
+            if clean_b and not any(e["name"].lower() == clean_b.lower() for e in entities):
+                self.add_entity(clean_b, category="Concept", description=f"Technical concept emphasized in [{cite_id}]", cite_id=cite_id)
+                entities.append({"name": clean_b, "category": "Concept"})
 
         # Relate pairs if multiple entities found
         ent_names = [e["name"] for e in entities]
@@ -216,7 +289,11 @@ class KnowledgeGraphEngine:
         self.clear()
         for doc in documents:
             if getattr(doc, "enabled", True) and doc.content:
-                self.extract_from_text(doc.content, cite_id=doc.cite_id)
+                self.extract_from_text(doc.content, cite_id=getattr(doc, "cite_id", 1))
+
+    def build_from_synthesis(self, report_markdown: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Extract and add entities directly from synthesis report markdown."""
+        return self.extract_from_text(report_markdown, cite_id=1)
 
     def get_nodes_data(self) -> List[Dict[str, Any]]:
         """Return all node metadata for UI rendering."""
@@ -271,3 +348,4 @@ class KnowledgeGraphEngine:
                 premise=e.get("premise", ""),
                 cite_id=e.get("cite_id"),
             )
+

@@ -1957,7 +1957,11 @@ class MainWindow(QMainWindow):
 
         # Phase 11: Update Knowledge Graph
         if hasattr(self, "knowledge_graph_engine"):
-            self.knowledge_graph_engine.build_from_documents(self.corpus.get_all_documents())
+            docs = self.corpus.get_all_documents() if hasattr(self, "corpus") else []
+            if docs:
+                self.knowledge_graph_engine.build_from_documents(docs)
+            if result.markdown_report:
+                self.knowledge_graph_engine.extract_from_text(result.markdown_report, cite_id=1)
             if hasattr(self, "active_workspace_pane") and hasattr(self.active_workspace_pane, "knowledge_graph_viewer"):
                 self.active_workspace_pane.knowledge_graph_viewer.load_graph(self.knowledge_graph_engine)
 
@@ -2000,7 +2004,11 @@ class MainWindow(QMainWindow):
             self._refresh_corpus_ui()
             self._refresh_audit()
             if hasattr(self, "knowledge_graph_engine"):
-                self.knowledge_graph_engine.build_from_documents(self.corpus.get_all_documents())
+                docs = self.corpus.get_all_documents() if hasattr(self, "corpus") else []
+                if docs:
+                    self.knowledge_graph_engine.build_from_documents(docs)
+                if updated:
+                    self.knowledge_graph_engine.extract_from_text(updated, cite_id=1)
                 if hasattr(self, "active_workspace_pane") and hasattr(self.active_workspace_pane, "knowledge_graph_viewer"):
                     self.active_workspace_pane.knowledge_graph_viewer.load_graph(self.knowledge_graph_engine)
             self._set_status(f"Autonomous Gap-Filling complete: +{len(new_docs)} primary source(s) ingested.")

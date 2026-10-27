@@ -348,6 +348,8 @@ class WorkspaceReportPane(QWidget):
 
     def update_synthesis_views(self, markdown_text: str) -> None:
         """Update synthesis viewer, causal graph, and chronology views."""
+        self.synthesis_original_text = markdown_text
+        self.synthesis_viewer.setHtml(build_dark_html(markdown_text, interactive_citations=True))
         self.causal_graph_viewer.set_markdown_report(markdown_text)
         self.chronology_viewer.set_markdown_report(markdown_text)
 

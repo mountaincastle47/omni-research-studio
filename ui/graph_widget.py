@@ -156,9 +156,31 @@ class KnowledgeGraphWidget(QWidget):
 
         layout.addWidget(legend_frame)
 
-    def load_graph(self, engine: KnowledgeGraphEngine) -> None:
-        """Update and re-render knowledge graph from engine."""
-        self.engine = engine
+    def load_graph(
+        self,
+        engine_or_entities: Any = None,
+        relations: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        """Update and re-render knowledge graph from engine instance or (entities, relations) lists."""
+        if isinstance(engine_or_entities, KnowledgeGraphEngine):
+            self.engine = engine_or_entities
+        elif isinstance(engine_or_entities, list):
+            for e in engine_or_entities:
+                if isinstance(e, dict) and e.get("name"):
+                    self.engine.add_entity(
+                        name=e["name"],
+                        category=e.get("category", "Concept"),
+                        description=e.get("description", ""),
+                    )
+            if relations and isinstance(relations, list):
+                for r in relations:
+                    if isinstance(r, dict) and r.get("source") and r.get("target"):
+                        self.engine.add_relation(
+                            source_name=r["source"],
+                            target_name=r["target"],
+                            relation=r.get("relation", "connected_to"),
+                            premise=r.get("premise", ""),
+                        )
         self._render_graph()
 
     def _render_graph(self) -> None:
@@ -229,6 +251,8 @@ class KnowledgeGraphWidget(QWidget):
             self._node_items[node_id] = node_item
 
         self.view.setSceneRect(self.scene.itemsBoundingRect().adjusted(-60, -60, 60, 60))
+        if g.number_of_nodes() > 0:
+            self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     def _on_filter_changed(self, text: str) -> None:
         """Filter node visibility or highlight matching nodes."""

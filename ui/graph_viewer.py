@@ -1,30 +1,235 @@
-"""Interactive Causal Failure & Argument Graph Viewer: SVG rendering, zoom/pan controls, and text navigation."""
+"""Interactive Causal Failure & Argument Graph Viewer: QGraphicsView rendering with discrete nodes, directed edges, zoom/pan controls."""
 
 from __future__ import annotations
 
+import html
+import math
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import Qt, QUrl, pyqtSignal
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtCore import QPointF, QRectF, Qt, QUrl, pyqtSignal
+from PyQt6.QtGui import (
+    QBrush,
+    QColor,
+    QCursor,
+    QDesktopServices,
+    QFont,
+    QFontMetrics,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPolygonF,
+)
 from PyQt6.QtWidgets import (
     QFileDialog,
-    QFrame,
+    QGraphicsItem,
+    QGraphicsScene,
+    QGraphicsView,
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QTextBrowser,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from core.graph_generator import extract_mermaid_blocks, render_mermaid_to_svg
+from core.graph_generator import (
+    MermaidEdge,
+    MermaidNode,
+    ParsedMermaidGraph,
+    extract_mermaid_blocks,
+    parse_mermaid_code,
+    render_mermaid_to_svg,
+)
 from core.i18n import get_text
 
 
+def intersect_card(cx: float, cy: float, hw: float, hh: float, dx: float, dy: float) -> QPointF:
+    """Calculate intersection point of a ray from center (cx, cy) in direction (dx, dy) with rectangle [-hw, -hh, hw, hh]."""
+    if dx == 0 and dy == 0:
+        return QPointF(cx, cy)
+    scale_x = abs(hw / dx) if dx != 0 else float("inf")
+    scale_y = abs(hh / dy) if dy != 0 else float("inf")
+    scale = min(scale_x, scale_y)
+    return QPointF(cx + dx * scale, cy + dy * scale)
+
+
+class _CausalNodeGraphicsItem(QGraphicsItem):
+    """Discrete interactive causal node card rendering rounded dark pill with border and wrapped text."""
+
+    def __init__(
+        self,
+        node_id: str,
+        label: str,
+        width: float = 240.0,
+        height: float = 72.0,
+        parent_widget: Optional[CausalGraphWidget] = None,
+    ) -> None:
+        super().__init__()
+        self.node_id = node_id
+        self.label = label
+        self.width = width
+        self.height = height
+        self.parent_widget = parent_widget
+        self.is_hovered = False
+
+        self.setFlags(
+            QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+            | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
+            | QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+        )
+        self.setAcceptHoverEvents(True)
+        self.setToolTip(f"[{node_id}] {label}")
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(-self.width / 2.0, -self.height / 2.0, self.width, self.height)
+
+    def shape(self) -> QPainterPath:
+        path = QPainterPath()
+        path.addRoundedRect(self.boundingRect(), 10.0, 10.0)
+        return path
+
+    def paint(self, painter: QPainter, option: Any, widget: Optional[QWidget] = None) -> None:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = self.boundingRect()
+        path = QPainterPath()
+        path.addRoundedRect(rect, 10.0, 10.0)
+
+        # Background fill
+        bg_color = QColor("#1E293B") if self.is_hovered else QColor("#0F172A")
+        painter.fillPath(path, QBrush(bg_color))
+
+        # Border
+        border_color = QColor("#7DD3FC") if self.is_hovered else QColor("#38BDF8")
+        pen_width = 2.4 if self.is_hovered else 1.8
+        painter.strokePath(path, QPen(border_color, pen_width))
+
+        # Text rendering with padding and word wrap
+        inner_rect = rect.adjusted(12.0, 8.0, -12.0, -8.0)
+        painter.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+        painter.setPen(QPen(QColor("#F8FAFC")))
+        painter.drawText(
+            inner_rect,
+            int(Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap),
+            self.label,
+        )
+
+    def hoverEnterEvent(self, event: Any) -> None:
+        self.is_hovered = True
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.update()
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event: Any) -> None:
+        self.is_hovered = False
+        self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+        self.update()
+        super().hoverLeaveEvent(event)
+
+    def mousePressEvent(self, event: Any) -> None:
+        if self.parent_widget:
+            self.parent_widget.node_selected.emit(self.node_id, self.label)
+            # Check for bracketed citation [N] in label
+            match = re.search(r"\[(\d+)\]", self.label)
+            if match:
+                self.parent_widget.citation_clicked.emit(QUrl(f"cite:{match.group(1)}"))
+        super().mousePressEvent(event)
+
+
+class _CausalEdgeGraphicsItem(QGraphicsItem):
+    """Directed edge arrow connecting source and target causal cards with boundary snapping."""
+
+    def __init__(
+        self,
+        source_item: _CausalNodeGraphicsItem,
+        target_item: _CausalNodeGraphicsItem,
+        relation: str = "",
+        arrow: bool = True,
+    ) -> None:
+        super().__init__()
+        self.source_item = source_item
+        self.target_item = target_item
+        self.relation = relation
+        self.arrow = arrow
+        self.setZValue(1.0)
+
+    def boundingRect(self) -> QRectF:
+        p1 = self.source_item.pos()
+        p2 = self.target_item.pos()
+        return QRectF(p1, p2).normalized().adjusted(-50.0, -50.0, 50.0, 50.0)
+
+    def paint(self, painter: QPainter, option: Any, widget: Optional[QWidget] = None) -> None:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        p1 = self.source_item.pos()
+        p2 = self.target_item.pos()
+
+        dx = p2.x() - p1.x()
+        dy = p2.y() - p1.y()
+        dist = math.hypot(dx, dy)
+        if dist < 1.0:
+            return
+
+        start_pt = intersect_card(
+            p1.x(), p1.y(),
+            self.source_item.width / 2.0, self.source_item.height / 2.0,
+            dx, dy,
+        )
+        end_pt = intersect_card(
+            p2.x(), p2.y(),
+            self.target_item.width / 2.0, self.target_item.height / 2.0,
+            -dx, -dy,
+        )
+
+        edge_color = QColor("#38BDF8")
+        pen = QPen(edge_color, 2.0, Qt.PenStyle.SolidLine)
+        painter.setPen(pen)
+        painter.drawLine(start_pt, end_pt)
+
+        # Draw directed arrowhead at target card boundary
+        if self.arrow:
+            theta = math.atan2(end_pt.y() - start_pt.y(), end_pt.x() - start_pt.x())
+            arrow_len = 12.0
+            arrow_width = 6.0
+
+            arrow_poly = QPolygonF([
+                end_pt,
+                QPointF(
+                    end_pt.x() - arrow_len * math.cos(theta) + arrow_width * math.sin(theta),
+                    end_pt.y() - arrow_len * math.sin(theta) - arrow_width * math.cos(theta),
+                ),
+                QPointF(
+                    end_pt.x() - arrow_len * math.cos(theta) - arrow_width * math.sin(theta),
+                    end_pt.y() - arrow_len * math.sin(theta) + arrow_width * math.cos(theta),
+                ),
+            ])
+            painter.setBrush(QBrush(edge_color))
+            painter.drawPolygon(arrow_poly)
+
+        # Draw relation badge at midpoint
+        if self.relation:
+            mid_x = (start_pt.x() + end_pt.x()) / 2.0
+            mid_y = (start_pt.y() + end_pt.y()) / 2.0
+
+            font = QFont("Consolas", 8, QFont.Weight.Bold)
+            painter.setFont(font)
+            fm = QFontMetrics(font)
+            text_width = fm.horizontalAdvance(self.relation)
+            badge_rect = QRectF(mid_x - text_width / 2.0 - 6, mid_y - 10, text_width + 12, 20)
+
+            badge_path = QPainterPath()
+            badge_path.addRoundedRect(badge_rect, 4.0, 4.0)
+            painter.fillPath(badge_path, QBrush(QColor("#070A10")))
+            painter.strokePath(badge_path, QPen(QColor("#334155"), 1.2))
+
+            painter.setPen(QPen(QColor("#94A3B8")))
+            painter.drawText(badge_rect, int(Qt.AlignmentFlag.AlignCenter), self.relation)
+
+
 class CausalGraphWidget(QWidget):
-    """Visualizes causal failure trees and argument flowcharts rendered from Mermaid syntax."""
+    """Visualizes causal failure trees and argument flowcharts with discrete interactive QGraphicsView nodes and directed edges."""
 
     node_selected = pyqtSignal(str, str)  # (node_id, label)
     citation_clicked = pyqtSignal(QUrl)
@@ -33,13 +238,18 @@ class CausalGraphWidget(QWidget):
         super().__init__(parent)
         self._lang = lang
         self._current_svg: str = ""
-        self._zoom_factor: float = 1.0
         self._raw_mermaid: str = ""
+        self._parsed_graph: Optional[ParsedMermaidGraph] = None
+
         self._build_ui()
 
     @property
     def svg_content(self) -> str:
-        return self._current_svg
+        if self._current_svg:
+            return self._current_svg
+        if self._raw_mermaid:
+            return render_mermaid_to_svg(self._raw_mermaid)
+        return ""
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -75,58 +285,163 @@ class CausalGraphWidget(QWidget):
         toolbar.addWidget(self.btn_zoom_reset)
 
         self.btn_export = QPushButton("Export SVG" if self._lang == "en" else "SVG 내보내기", self)
-        self.btn_export.setStyleSheet("background-color: #1E293B; color: #F1F5F9; border-radius: 4px; padding: 4px 10px; font-size: 11px;")
+        self.btn_export.setStyleSheet(
+            "background-color: #1E293B; color: #F1F5F9; border-radius: 4px; padding: 4px 10px; font-size: 11px;"
+        )
         self.btn_export.clicked.connect(self._on_export_svg)
         toolbar.addWidget(self.btn_export)
 
         layout.addLayout(toolbar)
 
-        # SVG Display Viewer
-        self.viewer = QTextBrowser(self)
-        self.viewer.setOpenExternalLinks(False)
-        self.viewer.setOpenLinks(False)
-        self.viewer.anchorClicked.connect(self._on_anchor_clicked)
-        self.viewer.setStyleSheet(
-            "QTextBrowser { background-color: #0B0F19; border: 1px solid #1E293B; border-radius: 6px; padding: 10px; }"
+        # QGraphicsScene & QGraphicsView for discrete node & edge graph
+        self.scene = QGraphicsScene(self)
+        self.scene.setBackgroundBrush(QBrush(QColor("#070A10")))
+
+        self.view = QGraphicsView(self.scene, self)
+        self.view.setRenderHints(
+            QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.TextAntialiasing
+            | QPainter.RenderHint.SmoothPixmapTransform
         )
-        layout.addWidget(self.viewer, stretch=1)
+        self.view.setStyleSheet("QGraphicsView { border: 1px solid #1E293B; border-radius: 6px; background-color: #070A10; }")
+        self.view.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        layout.addWidget(self.view, stretch=1)
+
+        self._show_empty_state()
+
+    def _show_empty_state(self) -> None:
+        self.scene.clear()
+        msg = (
+            "No causal graph syntax detected in report. Generate or update synthesis."
+            if self._lang == "en"
+            else "보고서에서 인과 다이어그램 구문을 찾을 수 없습니다."
+        )
+        placeholder = self.scene.addSimpleText(msg)
+        placeholder.setFont(QFont("Segoe UI", 12))
+        placeholder.setBrush(QBrush(QColor("#64748B")))
+        bounds = placeholder.boundingRect()
+        placeholder.setPos(-bounds.width() / 2.0, -bounds.height() / 2.0)
+        self.scene.setSceneRect(placeholder.boundingRect().adjusted(-80, -80, 80, 80))
 
     def set_markdown_report(self, markdown_text: str) -> None:
-        """Extract and render Mermaid diagram from synthesis report text."""
+        """Extract and render discrete causal failure diagram from synthesis report text."""
         blocks = extract_mermaid_blocks(markdown_text)
         if blocks:
             self._raw_mermaid = blocks[0]
             self._current_svg = render_mermaid_to_svg(self._raw_mermaid)
+            self._parsed_graph = parse_mermaid_code(self._raw_mermaid)
+            self._render_graph()
         else:
             self._raw_mermaid = ""
-            self._current_svg = (
-                '<svg xmlns="http://www.w3.org/2005/svg" width="600" height="120">'
-                '<rect width="100%" height="100%" fill="#0B0F19"/>'
-                '<text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#94A3B8" font-size="13">'
-                + ("No causal graph syntax detected in report. Generate or update synthesis." if self._lang == "en" else "보고서에서 인과 다이어그램 구문을 찾을 수 없습니다.") +
-                '</text></svg>'
-            )
-        self._render_svg()
+            self._current_svg = ""
+            self._parsed_graph = None
+            self._show_empty_state()
 
-    def _render_svg(self) -> None:
-        if not self._current_svg:
-            self.viewer.clear()
+    def _render_graph(self) -> None:
+        """Compute discrete node and edge layout and populate QGraphicsScene."""
+        if not self._parsed_graph or not self._parsed_graph.nodes:
+            self._show_empty_state()
             return
-        # Wrap SVG in a centering container
-        html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head><style>body {{ background-color: #0B0F19; margin: 0; padding: 10px; text-align: center; }}</style></head>
-        <body>
-        <div style="transform: scale({self._zoom_factor}); transform-origin: top center; display: inline-block;">
-        {self._current_svg}
-        </div>
-        </body>
-        </html>
-        """
-        self.viewer.setHtml(html)
+
+        self.scene.clear()
+        graph = self._parsed_graph
+
+        node_items: Dict[str, _CausalNodeGraphicsItem] = {}
+        for nid, node in graph.nodes.items():
+            item = _CausalNodeGraphicsItem(nid, node.label or nid, parent_widget=self)
+            node_items[nid] = item
+            self.scene.addItem(item)
+
+        # Adjacency and in-degree mapping
+        children_map: Dict[str, List[str]] = {nid: [] for nid in graph.nodes}
+        in_degree: Dict[str, int] = {nid: 0 for nid in graph.nodes}
+        for edge in graph.edges:
+            if edge.source_id in graph.nodes and edge.target_id in graph.nodes:
+                children_map[edge.source_id].append(edge.target_id)
+                in_degree[edge.target_id] += 1
+
+        # Layer assignment (Topological BFS)
+        layers: List[List[str]] = []
+        roots = [nid for nid, deg in in_degree.items() if deg == 0]
+        if not roots:
+            roots = [list(graph.nodes.keys())[0]]
+
+        visited = set(roots)
+        layers.append(roots)
+
+        while True:
+            next_layer: List[str] = []
+            for nid in layers[-1]:
+                for ch in children_map.get(nid, []):
+                    if ch not in visited:
+                        visited.add(ch)
+                        next_layer.append(ch)
+            if not next_layer:
+                break
+            layers.append(next_layer)
+
+        # Append any unvisited nodes
+        unvisited = [nid for nid in graph.nodes if nid not in visited]
+        if unvisited:
+            layers.append(unvisited)
+
+        # Automatic layout coordinates enforcing minimum 150px horizontal and 100px vertical separation
+        is_horizontal = graph.direction in ("LR", "RL")
+        node_w = 240.0
+        node_h = 72.0
+        h_sep = 150.0  # Horizontal separation (exceeds 120px mandate)
+        v_sep = 100.0  # Vertical separation (exceeds 80px mandate)
+
+        for l_idx, layer in enumerate(layers):
+            count = len(layer)
+            if not is_horizontal:
+                # Top-Down: each layer is a horizontal row
+                total_w = count * node_w + (count - 1) * h_sep
+                start_x = -total_w / 2.0 + node_w / 2.0
+                y = l_idx * (node_h + v_sep)
+                for n_idx, nid in enumerate(layer):
+                    x = start_x + n_idx * (node_w + h_sep)
+                    node_items[nid].setPos(x, y)
+            else:
+                # Left-to-Right: each layer is a vertical column
+                total_h = count * node_h + (count - 1) * v_sep
+                start_y = -total_h / 2.0 + node_h / 2.0
+                x = l_idx * (node_w + h_sep)
+                for n_idx, nid in enumerate(layer):
+                    y = start_y + n_idx * (node_h + v_sep)
+                    node_items[nid].setPos(x, y)
+
+        # Add directed edge items
+        for edge in graph.edges:
+            if edge.source_id in node_items and edge.target_id in node_items:
+                src_item = node_items[edge.source_id]
+                tgt_item = node_items[edge.target_id]
+                edge_item = _CausalEdgeGraphicsItem(
+                    source_item=src_item,
+                    target_item=tgt_item,
+                    relation=edge.label,
+                    arrow=edge.arrow,
+                )
+                self.scene.addItem(edge_item)
+
+        # Update scene bounds and fit into view
+        self.scene.setSceneRect(self.scene.itemsBoundingRect().adjusted(-80, -80, 80, 80))
+        self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def _on_zoom_in(self) -> None:
+        self.view.scale(1.2, 1.2)
+
+    def _on_zoom_out(self) -> None:
+        self.view.scale(1.0 / 1.2, 1.0 / 1.2)
+
+    def _on_zoom_reset(self) -> None:
+        self.view.resetTransform()
+        rect = self.scene.itemsBoundingRect().adjusted(-60, -60, 60, 60)
+        if not rect.isEmpty():
+            self.view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
 
     def _on_anchor_clicked(self, url: QUrl) -> None:
+        """Programmatic anchor click handler for backward compatibility."""
         url_str = url.toString()
         if url_str.startswith("node:"):
             node_id = url_str[5:]
@@ -136,21 +451,13 @@ class CausalGraphWidget(QWidget):
         else:
             QDesktopServices.openUrl(url)
 
-    def _on_zoom_in(self) -> None:
-        self._zoom_factor = min(3.0, self._zoom_factor + 0.15)
-        self._render_svg()
-
-    def _on_zoom_out(self) -> None:
-        self._zoom_factor = max(0.4, self._zoom_factor - 0.15)
-        self._render_svg()
-
-    def _on_zoom_reset(self) -> None:
-        self._zoom_factor = 1.0
-        self._render_svg()
-
     def _on_export_svg(self) -> None:
+        if not self._current_svg and self._raw_mermaid:
+            self._current_svg = render_mermaid_to_svg(self._raw_mermaid)
+
         if not self._current_svg:
             return
+
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "Save Causal Graph SVG" if self._lang == "en" else "인과 다이어그램 SVG 저장",
