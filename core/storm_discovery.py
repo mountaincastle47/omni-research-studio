@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, List, Optional
@@ -487,11 +488,25 @@ class OmniSweepDiscoveryAgent:
         self.scrape_status_text = scrape_status_text
         self.max_scrape_per_perspective = max_scrape_per_perspective
         self.scrape_timeout = scrape_timeout
+        self.stop_requested = threading.Event()
+        self.active_client: Any = client
         if article_fetcher is None:
             from core.web_scraper import fetch_web_article
 
             article_fetcher = fetch_web_article
         self.article_fetcher = article_fetcher
+
+    def request_stop(self) -> None:
+        """Cooperative cancellation request with client socket teardown."""
+        self.stop_requested.set()
+        if hasattr(self, "client") and self.client:
+            try:
+                self.client.close()
+            except Exception:
+                pass
+
+    def is_stopped(self) -> bool:
+        return self.stop_requested.is_set()
 
     def scrape_perspective_sources(
         self,
@@ -600,17 +615,20 @@ class OmniSweepDiscoveryAgent:
         total = len(perspectives)
         completed_durations: List[float] = []
 
+        def _check_cancelled() -> bool:
+            return self.stop_requested.is_set() or (cancel_check is not None and cancel_check())
+
         for index, persona in enumerate(perspectives, start=1):
-            if cancel_check and cancel_check():
+            if _check_cancelled():
                 raise TaskCancelledError("Task aborted by user.")
 
             if index > 1 and self.inter_perspective_delay > 0:
                 pacing_msg = f"Pacing API calls to respect rate limits... ({self.inter_perspective_delay:.0f}s)"
                 if progress_callback:
                     progress_callback(pacing_msg)
-                sleep_with_cancel_check(self.inter_perspective_delay, cancel_check=cancel_check)
+                sleep_with_cancel_check(self.inter_perspective_delay, cancel_check=_check_cancelled)
 
-            if cancel_check and cancel_check():
+            if _check_cancelled():
                 raise TaskCancelledError("Task aborted by user.")
 
             step_start = time.monotonic()
@@ -645,10 +663,10 @@ class OmniSweepDiscoveryAgent:
                 perspective_role=p_role,
                 corpus_summary=corpus_summary,
                 progress_callback=progress_callback,
-                cancel_check=cancel_check,
+                cancel_check=_check_cancelled,
             )
 
-            if cancel_check and cancel_check():
+            if _check_cancelled():
                 raise TaskCancelledError("Task aborted by user.")
 
             # Sub-phase 2: Search grounding (60% of perspective slice -> 75% cumulative within slice)
@@ -667,11 +685,11 @@ class OmniSweepDiscoveryAgent:
                     corpus_summary=corpus_summary,
                     formulated_queries=formulated_queries,
                     progress_callback=progress_callback,
-                    cancel_check=cancel_check,
+                    cancel_check=_check_cancelled,
                     heartbeat_callback=heartbeat_callback,
                 )
 
-                if cancel_check and cancel_check():
+                if _check_cancelled():
                     raise TaskCancelledError("Task aborted by user.")
 
                 if heartbeat_callback:
@@ -682,7 +700,7 @@ class OmniSweepDiscoveryAgent:
                     report.scraped_sources = self.scrape_perspective_sources(
                         report,
                         progress_callback=progress_callback,
-                        cancel_check=cancel_check,
+                        cancel_check=_check_cancelled,
                         heartbeat_callback=heartbeat_callback,
                     )
             except Exception as e:

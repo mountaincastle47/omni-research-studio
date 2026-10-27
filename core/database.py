@@ -84,6 +84,9 @@ def get_db_connection(db_path: Union[str, Path] = DB_PATH) -> sqlite3.Connection
         try:
             conn.execute("PRAGMA journal_mode = WAL;")
             conn.execute("PRAGMA synchronous = NORMAL;")
+            conn.execute("PRAGMA cache_size = -64000;")       # 64MB dedicated RAM cache
+            conn.execute("PRAGMA mmap_size = 268435456;")     # 256MB memory-mapped direct I/O
+            conn.execute("PRAGMA temp_store = MEMORY;")
             conn.execute("PRAGMA busy_timeout = 5000;")
         except sqlite3.OperationalError:
             pass

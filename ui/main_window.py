@@ -795,7 +795,7 @@ class MainWindow(QMainWindow):
         self.btn_cancel.setObjectName("CancelTaskBtn")
         self.btn_cancel.setFixedWidth(90)
         self.btn_cancel.setVisible(False)
-        self.btn_cancel.clicked.connect(self._on_cancel_active_task)
+        self.btn_cancel.clicked.connect(self.on_cancel_requested)
 
         status_controls_layout.addWidget(self.eta_container)
         status_controls_layout.addWidget(self.progress_bar)
@@ -1413,17 +1413,23 @@ class MainWindow(QMainWindow):
             self.eta_prefix_label.setFixedWidth(0)
             self.eta_value_label.setText("")
 
-    def _on_cancel_active_task(self) -> None:
-        """Cooperatively request interruption of the active QThread worker and restore UI immediately."""
-        if self.active_worker is not None:
+    def on_cancel_requested(self) -> None:
+        """Centralized immediate cooperative cancellation handler."""
+        if hasattr(self, "btn_cancel"):
+            self.btn_cancel.setText("Cancelling... / 취소 중...")
             self.btn_cancel.setEnabled(False)
-            self._set_status(get_text("status_canceling", self.current_language))
-            if hasattr(self.active_worker, "stop_requested"):
-                self.active_worker.stop_requested.set()
-            self.active_worker.requestInterruption()
+        if self.active_worker is not None:
+            if hasattr(self.active_worker, "request_stop"):
+                self.active_worker.request_stop()
+            elif hasattr(self.active_worker, "requestInterruption"):
+                self.active_worker.requestInterruption()
             if hasattr(self.active_worker, "cancel"):
                 self.active_worker.cancel()
-            self._on_worker_cancelled()
+        self._on_worker_cancelled()
+
+    def _on_cancel_active_task(self) -> None:
+        """Alias for centralized cancellation."""
+        self.on_cancel_requested()
 
     def _on_worker_detailed_progress(self, percentage: int, eta_seconds: int, status_text: str) -> None:
         if percentage > 0:
@@ -1458,8 +1464,11 @@ class MainWindow(QMainWindow):
         self.perspective_is_translating = False
         self.synthesis_translation_status.setText("")
         self.perspective_translation_status.setText("")
+        if hasattr(self, "progress_bar"):
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(0)
         self._end_task(reset_progress=True)
-        self._set_status(get_text("status_cancelled", self.current_language))
+        self._set_status(get_text("status_cancelled", self.current_language) or "Task Canceled / 작업 취소됨")
 
     def _start_translation(self, source_markdown: str, target_pane: str) -> None:
         """Spawn an asynchronous TranslationWorker for `synthesis` or `perspective`."""
@@ -1955,15 +1964,22 @@ class MainWindow(QMainWindow):
             self.workspace_tabs.auto_name_active_tab(self.query_input.toPlainText() or result.query or "Research Workspace")
         self.update_telemetry()
 
-        # Phase 11: Update Knowledge Graph
-        if hasattr(self, "knowledge_graph_engine"):
-            docs = self.corpus.get_all_documents() if hasattr(self, "corpus") else []
-            if docs:
-                self.knowledge_graph_engine.build_from_documents(docs)
-            if result.markdown_report:
-                self.knowledge_graph_engine.extract_from_text(result.markdown_report, cite_id=1)
-            if hasattr(self, "active_workspace_pane") and hasattr(self.active_workspace_pane, "knowledge_graph_viewer"):
-                self.active_workspace_pane.knowledge_graph_viewer.load_graph(self.knowledge_graph_engine)
+        # Phase 4 Optimization: Fast loading using precomputed background layouts
+        causal_layout = getattr(result, "causal_layout", None)
+        kg_layout = getattr(result, "kg_layout", None)
+        if getattr(result, "kg_engine", None):
+            self.knowledge_graph_engine = result.kg_engine
+
+        if hasattr(self, "active_workspace_pane"):
+            self.active_workspace_pane.update_synthesis_views(
+                full_markdown,
+                precomputed_causal_layout=causal_layout,
+                precomputed_kg_layout=kg_layout,
+            )
+            if kg_layout and hasattr(self.active_workspace_pane, "knowledge_graph_viewer"):
+                self.active_workspace_pane.knowledge_graph_viewer.load_precomputed_layout(kg_layout)
+        from PyQt6.QtCore import QCoreApplication
+        QCoreApplication.processEvents()
 
         if self.current_language == "ko":
             self._start_translation(full_markdown, target_pane="synthesis")
@@ -2003,14 +2019,21 @@ class MainWindow(QMainWindow):
                 self.active_workspace_pane.update_synthesis_views(updated)
             self._refresh_corpus_ui()
             self._refresh_audit()
-            if hasattr(self, "knowledge_graph_engine"):
-                docs = self.corpus.get_all_documents() if hasattr(self, "corpus") else []
-                if docs:
-                    self.knowledge_graph_engine.build_from_documents(docs)
-                if updated:
-                    self.knowledge_graph_engine.extract_from_text(updated, cite_id=1)
-                if hasattr(self, "active_workspace_pane") and hasattr(self.active_workspace_pane, "knowledge_graph_viewer"):
-                    self.active_workspace_pane.knowledge_graph_viewer.load_graph(self.knowledge_graph_engine)
+            causal_layout = getattr(self._gap_fill_worker, "precomputed_causal_layout", None) if hasattr(self, "_gap_fill_worker") else None
+            kg_layout = getattr(self._gap_fill_worker, "precomputed_kg_layout", None) if hasattr(self, "_gap_fill_worker") else None
+            if hasattr(self, "_gap_fill_worker") and getattr(self._gap_fill_worker, "precomputed_kg_engine", None):
+                self.knowledge_graph_engine = self._gap_fill_worker.precomputed_kg_engine
+
+            if hasattr(self, "active_workspace_pane"):
+                self.active_workspace_pane.update_synthesis_views(
+                    updated,
+                    precomputed_causal_layout=causal_layout,
+                    precomputed_kg_layout=kg_layout,
+                )
+                if kg_layout and hasattr(self.active_workspace_pane, "knowledge_graph_viewer"):
+                    self.active_workspace_pane.knowledge_graph_viewer.load_precomputed_layout(kg_layout)
+            from PyQt6.QtCore import QCoreApplication
+            QCoreApplication.processEvents()
             self._set_status(f"Autonomous Gap-Filling complete: +{len(new_docs)} primary source(s) ingested.")
         else:
             self._set_status("Autonomous Gap-Filling complete (No unresolved gaps detected).")

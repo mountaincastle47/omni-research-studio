@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import urllib.parse
 import urllib.request
@@ -18,8 +19,11 @@ from core.config import ConfigManager, DEFAULT_SYNTHESIS_MODEL
 from core.document_loader import DocumentCorpus, SourceDocument
 from core.i18n import get_text
 from core.local_llm_client import is_local_model
+from core.synthesis import fast_json_dumps
 
 logger = logging.getLogger("OmniDeepResearch")
+
+MAX_GAP_ITERATIONS: int = 2
 
 
 def parse_contested_matrix(report_markdown: str) -> List[Dict[str, str]]:
@@ -113,11 +117,27 @@ class DeepResearchEngine:
     ) -> None:
         self.config_manager = config_manager or ConfigManager()
         self.model_name = model_name
+        self.stop_requested = threading.Event()
+        self.active_client: Any = None
+
+    def request_stop(self) -> None:
+        """Cooperatively signal task cancellation and close active network client."""
+        self.stop_requested.set()
+        if hasattr(self, "active_client") and self.active_client:
+            try:
+                self.active_client.close()
+            except Exception:
+                pass
+
+    def is_stopped(self) -> bool:
+        return self.stop_requested.is_set()
 
     def search_and_scrape(self, query: str, max_results: int = 2) -> List[Dict[str, str]]:
         """
         Query public search endpoints (DuckDuckGo HTML) and extract clean full text via trafilatura.
         """
+        if self.stop_requested.is_set():
+            return []
         results: List[Dict[str, str]] = []
         try:
             encoded_q = urllib.parse.quote_plus(query)
@@ -129,6 +149,9 @@ class DeepResearchEngine:
             with urllib.request.urlopen(req, timeout=8) as resp:
                 html_data = resp.read().decode("utf-8", errors="ignore")
 
+            if self.stop_requested.is_set():
+                return []
+
             # Extract raw href links
             raw_links = re.findall(r'<a[^>]+class=["\']result__url["\'][^>]+href=["\']([^"\']+)["\']', html_data)
             if not raw_links:
@@ -137,6 +160,8 @@ class DeepResearchEngine:
 
             scraped_count = 0
             for link in raw_links:
+                if self.stop_requested.is_set():
+                    break
                 if not link.startswith("http") or any(b in link for b in ["duckduckgo.com", "youtube.com"]):
                     continue
 
@@ -175,63 +200,91 @@ class DeepResearchEngine:
         progress_callback: Optional[Callable[[str], None]] = None,
     ) -> Tuple[str, List[SourceDocument]]:
         """
-        Executes complete autonomous deepening loop:
-        1. Parse gaps from report.
-        2. Formulate 1-3 targeted search queries.
-        3. Scrape and ingest primary evidence.
-        4. Synthesize Gap-Fill Addendum.
+        Executes bounded autonomous deepening loop:
+        Enforces MAX_GAP_ITERATIONS = 2 and delta convergence checks.
         """
         def notify(msg: str) -> None:
             if progress_callback:
                 progress_callback(msg)
 
-        notify("Parsing Contested Claims & Empirical Anomalies Matrix...")
-        gaps = parse_contested_matrix(report_markdown)
-        if not gaps:
-            notify("No high-priority empirical ambiguities detected in report.")
-            return "", []
+        current_iteration = 0
+        total_addendum = ""
+        all_new_docs: List[SourceDocument] = []
+        current_report = report_markdown
+        prev_gap_count: Optional[int] = None
 
-        notify(f"Identified {len(gaps)} empirical gap(s). Formulating targeted deep search queries...")
-        queries = generate_gap_queries(gaps, base_topic=base_topic, max_queries=3)
+        while current_iteration < MAX_GAP_ITERATIONS:
+            if self.stop_requested.is_set():
+                break
 
-        new_docs: List[SourceDocument] = []
-        next_cite_id = len(corpus.get_all_documents()) + 1
+            current_iteration += 1
+            notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] Analyzing remaining gaps...")
 
-        for idx, q in enumerate(queries, 1):
-            notify(f"Executing Deep Gap-Fill [{idx}/{len(queries)}]: {q}...")
-            scraped_items = self.search_and_scrape(q, max_results=1)
+            gaps = parse_contested_matrix(current_report)
+            if not gaps:
+                notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] No high-priority empirical ambiguities detected in report.")
+                break
 
-            for item in scraped_items:
-                doc = SourceDocument(
-                    cite_id=next_cite_id,
-                    title=f"[DEEP RESEARCH GAP-FILL] {item['title']}",
-                    source_type="deep_gap_fill",
-                    path_or_uri=item["url"],
-                    content=item["content"],
-                    metadata={
-                        "authority": "primary",
-                        "is_gap_fill": True,
-                        "gap_query": q,
-                        "origin_tag": "Autonomous Deepening Loop",
-                    },
-                )
-                corpus.add_document(doc)
-                new_docs.append(doc)
-                next_cite_id += 1
+            if prev_gap_count is not None:
+                # Delta convergence check: if gaps resolved or delta < 5%, break early
+                delta = (prev_gap_count - len(gaps)) / max(1, prev_gap_count)
+                if len(gaps) == 0 or delta < 0.05:
+                    notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] Gap coverage delta ({delta:.1%}) converged. Ending deepening.")
+                    break
+            prev_gap_count = len(gaps)
 
-        if not new_docs:
-            notify("Deep research search completed. No additional primary documents ingested.")
-            return "", []
+            notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] Identified {len(gaps)} empirical gap(s). Formulating targeted queries...")
+            queries = generate_gap_queries(gaps, base_topic=base_topic, max_queries=3)
 
-        notify(f"Synthesizing Autonomous Gap-Fill Addendum using {len(new_docs)} new document(s)...")
-        addendum = self._synthesize_addendum(
-            original_report=report_markdown,
-            gaps=gaps,
-            new_docs=new_docs,
-            lang=lang,
-        )
+            iter_new_docs: List[SourceDocument] = []
+            next_cite_id = len(corpus.get_all_documents()) + 1
+
+            for idx, q in enumerate(queries, 1):
+                if self.stop_requested.is_set():
+                    break
+                notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] Executing Deep Gap-Fill [{idx}/{len(queries)}]: {q}...")
+                scraped_items = self.search_and_scrape(q, max_results=1)
+
+                for item in scraped_items:
+                    doc = SourceDocument(
+                        cite_id=next_cite_id,
+                        title=f"[DEEP RESEARCH GAP-FILL] {item['title']}",
+                        source_type="deep_gap_fill",
+                        path_or_uri=item["url"],
+                        content=item["content"],
+                        metadata={
+                            "authority": "primary",
+                            "is_gap_fill": True,
+                            "gap_query": q,
+                            "origin_tag": "Autonomous Deepening Loop",
+                            "iteration": current_iteration,
+                        },
+                    )
+                    corpus.add_document(doc)
+                    iter_new_docs.append(doc)
+                    all_new_docs.append(doc)
+                    next_cite_id += 1
+
+            if not iter_new_docs:
+                notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] Deep research completed. No additional primary documents ingested.")
+                break
+
+            notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] Synthesizing addendum using {len(iter_new_docs)} new document(s)...")
+            addendum = self._synthesize_addendum(
+                original_report=current_report,
+                gaps=gaps,
+                new_docs=iter_new_docs,
+                lang=lang,
+            )
+            if addendum:
+                if total_addendum:
+                    total_addendum = f"{total_addendum}\n\n{addendum}"
+                else:
+                    total_addendum = addendum
+                current_report = f"{current_report}\n\n{addendum}"
+
         notify("Autonomous Gap-Fill Addendum complete.")
-        return addendum, new_docs
+        return total_addendum, all_new_docs
 
     def _synthesize_addendum(
         self,
@@ -246,7 +299,7 @@ class DeepResearchEngine:
             for d in new_docs
         ])
 
-        gaps_json = json.dumps(gaps, indent=2, ensure_ascii=False)
+        gaps_json = fast_json_dumps(gaps, indent=2)
 
         prompt = (
             f"You are the Lead Forensic Research Evaluator for OmniResearch Studio.\n"

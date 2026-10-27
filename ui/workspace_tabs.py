@@ -346,11 +346,23 @@ class WorkspaceReportPane(QWidget):
         if clean:
             self.synthesis_viewer.find(clean)
 
-    def update_synthesis_views(self, markdown_text: str) -> None:
+    def update_synthesis_views(
+        self,
+        markdown_text: str,
+        precomputed_causal_layout: Optional[Dict[str, Any]] = None,
+        precomputed_kg_layout: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """Update synthesis viewer, causal graph, and chronology views."""
         self.synthesis_original_text = markdown_text
         self.synthesis_viewer.setHtml(build_dark_html(markdown_text, interactive_citations=True))
-        self.causal_graph_viewer.set_markdown_report(markdown_text)
+        if precomputed_causal_layout and hasattr(self.causal_graph_viewer, "load_precomputed_layout"):
+            self.causal_graph_viewer.load_precomputed_layout(precomputed_causal_layout)
+        else:
+            self.causal_graph_viewer.set_markdown_report(markdown_text)
+
+        if precomputed_kg_layout and hasattr(self, "knowledge_graph_viewer") and hasattr(self.knowledge_graph_viewer, "load_precomputed_layout"):
+            self.knowledge_graph_viewer.load_precomputed_layout(precomputed_kg_layout)
+
         self.chronology_viewer.set_markdown_report(markdown_text)
 
     def _on_inner_tab_changed(self, index: int) -> None:

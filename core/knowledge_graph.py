@@ -15,6 +15,7 @@ import networkx as nx
 from core.config import ConfigManager, DEFAULT_SYNTHESIS_MODEL
 from core.document_loader import SourceDocument
 from core.local_llm_client import is_local_model
+from core.synthesis import fast_json_loads
 
 logger = logging.getLogger("OmniKnowledgeGraph")
 
@@ -72,9 +73,9 @@ def clean_and_parse_json(raw_text: str) -> Dict[str, Any]:
     if match_fence:
         text = match_fence.group(1).strip()
 
-    # 2. Try direct json.loads
+    # 2. Try direct fast_json_loads
     try:
-        data = json.loads(text)
+        data = fast_json_loads(text)
         if isinstance(data, dict):
             return data
     except Exception:
@@ -84,7 +85,7 @@ def clean_and_parse_json(raw_text: str) -> Dict[str, Any]:
     match_braces = re.search(r"(\{[\s\S]*\})", text)
     if match_braces:
         try:
-            data = json.loads(match_braces.group(1))
+            data = fast_json_loads(match_braces.group(1))
             if isinstance(data, dict):
                 return data
         except Exception:
@@ -348,4 +349,108 @@ class KnowledgeGraphEngine:
                 premise=e.get("premise", ""),
                 cite_id=e.get("cite_id"),
             )
+
+    def compute_layout_data(self, min_repulsion: float = 120.0) -> Dict[str, Any]:
+        """Compute force-directed clustered layout coordinates entirely in background thread.
+        Clusters nodes by category with minimum 120px node repulsion to eliminate hairballs."""
+        import math
+
+        categories = ["Organization", "Program", "Key Figure", "Standard", "Material", "Concept"]
+        if self.graph.number_of_nodes() == 0:
+            return {"nodes": [], "edges": []}
+
+        cat_nodes: Dict[str, List[str]] = {c: [] for c in categories}
+        all_nodes_data = {}
+        for nid, data in self.graph.nodes(data=True):
+            cat = data.get("category", "Concept")
+            if cat not in cat_nodes:
+                cat = "Concept"
+            cat_nodes[cat].append(nid)
+            all_nodes_data[nid] = data
+
+        pos: Dict[str, List[float]] = {}
+        r_cluster = 320.0
+        for i, cat in enumerate(categories):
+            ang = i * (2.0 * math.pi / len(categories))
+            cx = r_cluster * math.cos(ang)
+            cy = r_cluster * math.sin(ang)
+            c_list = cat_nodes[cat]
+            if not c_list:
+                continue
+            if len(c_list) == 1:
+                pos[c_list[0]] = [cx, cy]
+            else:
+                for j, nid in enumerate(c_list):
+                    lang = j * (2.0 * math.pi / len(c_list))
+                    r_local = max(80.0, len(c_list) * 25.0)
+                    pos[nid] = [cx + r_local * math.cos(lang), cy + r_local * math.sin(lang)]
+
+        # Force-directed relaxation (repulsion + edge attraction)
+        node_keys = list(pos.keys())
+        for _ in range(40):
+            # Repulsion
+            for a in range(len(node_keys)):
+                u = node_keys[a]
+                for b in range(a + 1, len(node_keys)):
+                    v = node_keys[b]
+                    dx = pos[u][0] - pos[v][0]
+                    dy = pos[u][1] - pos[v][1]
+                    dist = math.hypot(dx, dy)
+                    if dist < min_repulsion:
+                        d = max(dist, 1.0)
+                        ov = (min_repulsion - dist) / d * 0.5
+                        pos[u][0] += dx * ov
+                        pos[u][1] += dy * ov
+                        pos[v][0] -= dx * ov
+                        pos[v][1] -= dy * ov
+
+            # Edge spring attraction
+            for u, v in self.graph.edges():
+                if u in pos and v in pos:
+                    dx = pos[v][0] - pos[u][0]
+                    dy = pos[v][1] - pos[u][1]
+                    dist = math.hypot(dx, dy)
+                    if dist > 180.0:
+                        pull = (dist - 180.0) * 0.04
+                        pull_x = (dx / max(dist, 1.0)) * pull
+                        pull_y = (dy / max(dist, 1.0)) * pull
+                        pos[u][0] += pull_x
+                        pos[u][1] += pull_y
+                        pos[v][0] -= pull_x
+                        pos[v][1] -= pull_y
+
+        # Build output structure
+        out_nodes: List[Dict[str, Any]] = []
+        for nid, (x, y) in pos.items():
+            d = all_nodes_data.get(nid, {})
+            cat = d.get("category", "Concept")
+            out_nodes.append({
+                "id": nid,
+                "name": d.get("name", nid),
+                "category": cat,
+                "color": d.get("color", ENTITY_CATEGORIES.get(cat, "#94A3B8")),
+                "description": d.get("description", ""),
+                "citations": d.get("citations", []),
+                "degree": self.graph.degree(nid),
+                "x": round(x, 1),
+                "y": round(y, 1),
+            })
+
+        out_edges: List[Dict[str, Any]] = []
+        for u, v, data in self.graph.edges(data=True):
+            if u in pos and v in pos:
+                out_edges.append({
+                    "source": u,
+                    "target": v,
+                    "relation": data.get("relation", "related_to"),
+                    "premise": data.get("premise", ""),
+                    "cite_id": data.get("cite_id"),
+                    "x1": round(pos[u][0], 1),
+                    "y1": round(pos[u][1], 1),
+                    "x2": round(pos[v][0], 1),
+                    "y2": round(pos[v][1], 1),
+                })
+
+        return {"nodes": out_nodes, "edges": out_edges}
+
 

@@ -20,6 +20,7 @@ from PyQt6.QtGui import (
     QPainterPath,
     QPen,
     QPolygonF,
+    QWheelEvent,
 )
 from PyQt6.QtWidgets import (
     QFileDialog,
@@ -33,6 +34,14 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+try:
+    from PyQt6.QtOpenGLWidgets import QOpenGLWidget
+except ImportError:
+    try:
+        from PySide6.QtOpenGLWidgets import QOpenGLWidget
+    except ImportError:
+        QOpenGLWidget = None
 
 from core.graph_generator import (
     MermaidEdge,
@@ -298,6 +307,17 @@ class CausalGraphWidget(QWidget):
         self.scene.setBackgroundBrush(QBrush(QColor("#070A10")))
 
         self.view = QGraphicsView(self.scene, self)
+        if QOpenGLWidget is not None:
+            try:
+                self.view.setViewport(QOpenGLWidget())
+            except Exception:
+                pass
+        self.view.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontSavePainterState, True)
+        self.view.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontAdjustForAntialiasing, True)
+        self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.view.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.view.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.view.setRenderHints(
             QPainter.RenderHint.Antialiasing
             | QPainter.RenderHint.TextAntialiasing
@@ -308,6 +328,47 @@ class CausalGraphWidget(QWidget):
         layout.addWidget(self.view, stretch=1)
 
         self._show_empty_state()
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        delta = event.angleDelta().y()
+        if delta > 0:
+            self.view.scale(1.15, 1.15)
+        elif delta < 0:
+            self.view.scale(1.0 / 1.15, 1.0 / 1.15)
+        else:
+            super().wheelEvent(event)
+
+    def load_precomputed_layout(self, layout_data: Optional[Dict[str, Any]]) -> None:
+        """Instantly load precalculated causal graph layout without running topology math on GUI thread."""
+        if not layout_data or not layout_data.get("nodes"):
+            self._show_empty_state()
+            return
+
+        self._raw_mermaid = layout_data.get("raw_mermaid", "")
+        self.scene.clear()
+
+        node_items: Dict[str, _CausalNodeGraphicsItem] = {}
+        for n in layout_data["nodes"]:
+            nid = n["id"]
+            item = _CausalNodeGraphicsItem(nid, n.get("label", nid), parent_widget=self)
+            item.setPos(n.get("x", 0.0), n.get("y", 0.0))
+            node_items[nid] = item
+            self.scene.addItem(item)
+
+        for edge in layout_data.get("edges", []):
+            src_id = edge.get("source")
+            tgt_id = edge.get("target")
+            if src_id in node_items and tgt_id in node_items:
+                edge_item = _CausalEdgeGraphicsItem(
+                    source_item=node_items[src_id],
+                    target_item=node_items[tgt_id],
+                    relation=edge.get("label", ""),
+                    arrow=edge.get("arrow", "-->"),
+                )
+                self.scene.addItem(edge_item)
+
+        self.scene.setSceneRect(self.scene.itemsBoundingRect().adjusted(-80, -80, 80, 80))
+        self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     def _show_empty_state(self) -> None:
         self.scene.clear()
@@ -474,3 +535,99 @@ class CausalGraphWidget(QWidget):
         self.btn_zoom_out.setToolTip(get_text("zoom_out_graph", lang))
         self.btn_zoom_reset.setToolTip(get_text("reset_graph", lang))
         self.btn_export.setText("Export SVG" if lang == "en" else "SVG 내보내기")
+
+
+def compute_causal_layout_from_markdown(markdown_text: str) -> Optional[Dict[str, Any]]:
+    """Compute causal graph layout coordinates off-main-thread in background worker."""
+    if not markdown_text or not markdown_text.strip():
+        return None
+
+    blocks = extract_mermaid_blocks(markdown_text)
+    if not blocks:
+        return None
+
+    raw_mermaid = blocks[0]
+    graph = parse_mermaid_code(raw_mermaid)
+    if not graph or not graph.nodes:
+        return None
+
+    children_map: Dict[str, List[str]] = {nid: [] for nid in graph.nodes}
+    in_degree: Dict[str, int] = {nid: 0 for nid in graph.nodes}
+    for edge in graph.edges:
+        if edge.source_id in graph.nodes and edge.target_id in graph.nodes:
+            children_map[edge.source_id].append(edge.target_id)
+            in_degree[edge.target_id] += 1
+
+    layers: List[List[str]] = []
+    roots = [nid for nid, deg in in_degree.items() if deg == 0]
+    if not roots:
+        roots = [list(graph.nodes.keys())[0]]
+
+    visited = set(roots)
+    layers.append(roots)
+
+    while True:
+        next_layer: List[str] = []
+        for nid in layers[-1]:
+            for ch in children_map.get(nid, []):
+                if ch not in visited:
+                    visited.add(ch)
+                    next_layer.append(ch)
+        if not next_layer:
+            break
+        layers.append(next_layer)
+
+    unvisited = [nid for nid in graph.nodes if nid not in visited]
+    if unvisited:
+        layers.append(unvisited)
+
+    is_horizontal = graph.direction in ("LR", "RL")
+    node_w = 240.0
+    node_h = 72.0
+    h_sep = 150.0
+    v_sep = 100.0
+
+    node_positions: Dict[str, Tuple[float, float]] = {}
+    for l_idx, layer in enumerate(layers):
+        count = len(layer)
+        if not is_horizontal:
+            total_w = count * node_w + (count - 1) * h_sep
+            start_x = -total_w / 2.0 + node_w / 2.0
+            y = l_idx * (node_h + v_sep)
+            for n_idx, nid in enumerate(layer):
+                x = start_x + n_idx * (node_w + h_sep)
+                node_positions[nid] = (round(x, 1), round(y, 1))
+        else:
+            total_h = count * node_h + (count - 1) * v_sep
+            start_y = -total_h / 2.0 + node_h / 2.0
+            x = l_idx * (node_w + h_sep)
+            for n_idx, nid in enumerate(layer):
+                y = start_y + n_idx * (node_h + v_sep)
+                node_positions[nid] = (round(x, 1), round(y, 1))
+
+    nodes_data = [
+        {
+            "id": nid,
+            "label": node.label or nid,
+            "x": node_positions[nid][0],
+            "y": node_positions[nid][1],
+        }
+        for nid, node in graph.nodes.items()
+        if nid in node_positions
+    ]
+    edges_data = [
+        {
+            "source": edge.source_id,
+            "target": edge.target_id,
+            "label": edge.label,
+            "arrow": edge.arrow,
+        }
+        for edge in graph.edges
+    ]
+
+    return {
+        "raw_mermaid": raw_mermaid,
+        "nodes": nodes_data,
+        "edges": edges_data,
+    }
+

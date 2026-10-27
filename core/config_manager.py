@@ -297,18 +297,23 @@ class ConfigManager:
         return bool(self.get_api_key())
 
     def create_client(self, api_key: Optional[str] = None):
-        """Instantiate a configured google-genai Client with granular 180s read timeout."""
+        """Instantiate a configured google-genai Client with granular 180s read timeout and persistent connection pooling."""
         api_key = api_key or self.get_api_key()
         if not api_key:
             raise ValueError(
                 "GEMINI_API_KEY is not configured. Please set your Gemini API key in Preferences or setup bar."
             )
+        import httpx
         from google import genai
         from google.genai import types
 
+        limits = httpx.Limits(max_keepalive_connections=20, max_connections=50)
         return genai.Client(
             api_key=api_key,
-            http_options=types.HttpOptions(timeout=180000.0),
+            http_options=types.HttpOptions(
+                timeout=180000.0,
+                client_args={"limits": limits},
+            ),
         )
 
     @property

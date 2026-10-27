@@ -71,12 +71,27 @@ if sys.stdout is None or sys.stderr is None:
     if sys.stderr is None:
         sys.stderr = _logger_stream
 
-# 6. High-DPI Display Configuration
+# 6. High-DPI Display Configuration & Desktop OpenGL Acceleration
 os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
 
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont, QGuiApplication
-from PyQt6.QtWidgets import QApplication
+try:
+    from PyQt6.QtCore import Qt, QCoreApplication, QTimer
+    from PyQt6.QtGui import QFont, QGuiApplication
+    from PyQt6.QtWidgets import QApplication
+except ImportError:
+    from PySide6.QtCore import Qt, QCoreApplication, QTimer
+    from PySide6.QtGui import QFont, QGuiApplication
+    from PySide6.QtWidgets import QApplication
+
+# Hardware-Accelerated Qt Rendering
+try:
+    if hasattr(Qt, "ApplicationAttribute"):
+        if hasattr(Qt.ApplicationAttribute, "AA_UseDesktopOpenGL"):
+            QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_UseDesktopOpenGL)
+        if hasattr(Qt.ApplicationAttribute, "AA_ShareOpenGLContexts"):
+            QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+except Exception:
+    pass
 
 QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
 

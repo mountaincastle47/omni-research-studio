@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 import threading
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 from PyQt6.QtCore import QObject, pyqtSignal
 
 
@@ -19,6 +19,28 @@ class WorkerSignals(QObject):
     telemetry = pyqtSignal(dict)
     canceled = pyqtSignal()
     task_timed_out = pyqtSignal(str, float)  # current_stage, elapsed_seconds
+
+
+class BaseWorker:
+    """Thread-safe worker base supporting cooperative cancellation and active socket teardown."""
+
+    def __init__(self) -> None:
+        self.stop_requested = threading.Event()
+        self.active_client: Any = None
+        self.signals = WorkerSignals()
+
+    def request_stop(self) -> None:
+        """Signal cooperative cancellation and close any active HTTP/network clients."""
+        self.stop_requested.set()
+        if hasattr(self, "active_client") and self.active_client:
+            try:
+                self.active_client.close()
+            except Exception:
+                pass
+
+    def is_stopped(self) -> bool:
+        """Check whether cancellation has been requested."""
+        return self.stop_requested.is_set()
 
 
 class InactivityWatchdog:

@@ -56,6 +56,9 @@ class BaseCancellableWorker(QThread):
     def __init__(self, cache_manager: Optional[CacheManager] = None) -> None:
         super().__init__()
         self.stop_requested = threading.Event()
+        self.active_client: Any = None
+        self._agent: Any = None
+        self._engine: Any = None
         self._is_cancelled: bool = False
         self._last_heartbeat: float = time.monotonic()
         self._task_start: float = time.monotonic()
@@ -109,6 +112,27 @@ class BaseCancellableWorker(QThread):
     def stop_watchdog(self) -> None:
         self._watchdog_active = False
 
+    def request_stop(self) -> None:
+        """Cooperative cancellation request with active client socket teardown."""
+        self.stop_requested.set()
+        self._is_cancelled = True
+        if hasattr(self, "_agent") and hasattr(self._agent, "request_stop"):
+            try:
+                self._agent.request_stop()
+            except Exception:
+                pass
+        if hasattr(self, "_engine") and hasattr(self._engine, "request_stop"):
+            try:
+                self._engine.request_stop()
+            except Exception:
+                pass
+        if hasattr(self, "active_client") and self.active_client:
+            try:
+                self.active_client.close()
+            except Exception:
+                pass
+        self.requestInterruption()
+
     def requestInterruption(self) -> None:
         """Set cooperative cancellation flag in addition to QThread interruption state."""
         self.stop_requested.set()
@@ -122,7 +146,7 @@ class BaseCancellableWorker(QThread):
 
     def cancel(self) -> None:
         """Alias for cooperative cancellation."""
-        self.requestInterruption()
+        self.request_stop()
 
     def is_cancelled(self) -> bool:
         """Check whether interruption or cancellation has been requested."""
@@ -254,6 +278,8 @@ class OmniSweepWorker(BaseCancellableWorker):
                     deep_scrape=self.deep_scrape,
                     scrape_status_text=self.scrape_status_text,
                 )
+                self._agent = agent
+                self.active_client = getattr(agent, "client", None)
 
                 completed_durations: List[float] = []
 
@@ -512,6 +538,7 @@ class SynthesisWorker(BaseCancellableWorker):
             synthesizer = NotebookSynthesizer(
                 client=client, model_name=model_name, compression_mode=self.compression_mode
             )
+            self.active_client = client
 
             est_prompt_tokens = sum(d.estimated_tokens for d in active_docs) + max(200, len(self.query) // 4 + 800)
             GLOBAL_COST_TRACKER.start_task(
@@ -555,9 +582,31 @@ class SynthesisWorker(BaseCancellableWorker):
                 self.cancelled.emit()
                 return
 
-            # Phase 4 (95% -> 100%): Final HTML rendering
-            self.record_heartbeat("Phase 4/4: Finalizing HTML report & citations...")
-            self.progress_Detailed.emit(97, 1, "Phase 4/4: Finalizing HTML report & citations...")
+            # Phase 4 (95% -> 100%): Precomputing graph layouts & HTML off the main thread
+            self.record_heartbeat("Phase 4/4: Precomputing layouts & citations...")
+            self.progress_Detailed.emit(97, 1, "Phase 4/4: Precomputing layouts & citations...")
+
+            # 1. Background Causal Graph layout computation
+            try:
+                from ui.graph_viewer import compute_causal_layout_from_markdown
+                result.causal_layout = compute_causal_layout_from_markdown(result.markdown_report)
+            except Exception:
+                result.causal_layout = None
+
+            # 2. Background Knowledge Graph layout computation
+            try:
+                from core.knowledge_graph import KnowledgeGraphEngine
+                kg_engine = KnowledgeGraphEngine()
+                if active_docs:
+                    kg_engine.build_from_documents(active_docs)
+                if result.markdown_report:
+                    kg_engine.extract_from_text(result.markdown_report, cite_id=1)
+                result.kg_layout = kg_engine.compute_layout_data(min_repulsion=120.0)
+                result.kg_engine = kg_engine
+            except Exception:
+                result.kg_layout = None
+                result.kg_engine = None
+
             self.cache_manager.set_synthesis(
                 self.query, corpus_hash, model_name, result.markdown_report
             )
@@ -1080,6 +1129,8 @@ class GapFillWorker(BaseCancellableWorker):
                 config_manager=self.config_manager,
                 model_name=self.model_name,
             )
+            self._engine = engine
+            self.active_client = getattr(engine, "active_client", None)
 
             def _progress(msg: str) -> None:
                 if not self.is_cancelled():
@@ -1093,6 +1144,27 @@ class GapFillWorker(BaseCancellableWorker):
                 progress_callback=_progress,
             )
             if not self.is_cancelled():
+                # Background precomputation of updated layouts
+                updated_report = self.report_markdown + (f"\n\n{addendum}" if addendum else "")
+                try:
+                    from ui.graph_viewer import compute_causal_layout_from_markdown
+                    self.precomputed_causal_layout = compute_causal_layout_from_markdown(updated_report)
+                except Exception:
+                    self.precomputed_causal_layout = None
+                try:
+                    from core.knowledge_graph import KnowledgeGraphEngine
+                    kg_engine = KnowledgeGraphEngine()
+                    all_docs = self.corpus.get_all_documents()
+                    if all_docs:
+                        kg_engine.build_from_documents(all_docs)
+                    if updated_report:
+                        kg_engine.extract_from_text(updated_report, cite_id=1)
+                    self.precomputed_kg_layout = kg_engine.compute_layout_data(min_repulsion=120.0)
+                    self.precomputed_kg_engine = kg_engine
+                except Exception:
+                    self.precomputed_kg_layout = None
+                    self.precomputed_kg_engine = None
+
                 self.gap_fill_finished.emit(addendum, new_docs)
         except TaskCancelledError:
             self.cancelled.emit()
