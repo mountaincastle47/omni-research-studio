@@ -2,10 +2,57 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 from pathlib import Path
 from typing import Dict, Optional, Union
+
+try:
+    from PySide6.QtCore import QStandardPaths
+except ImportError:
+    try:
+        from PyQt6.QtCore import QStandardPaths
+    except ImportError:
+        QStandardPaths = None
+
+
+def get_app_data_dir() -> Path:
+    # Resolves to %LOCALAPPDATA%\OmniResearchStudio on Windows
+    base_path = ""
+    if QStandardPaths is not None:
+        try:
+            base_path = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)
+        except Exception:
+            base_path = ""
+
+    if base_path:
+        p = Path(base_path)
+        app_dir = p if p.name.lower() == "omniresearchstudio" else p / "OmniResearchStudio"
+    else:
+        app_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "OmniResearchStudio"
+
+    app_dir.mkdir(parents=True, exist_ok=True)
+    return app_dir
+
+
+DB_PATH = str(get_app_data_dir() / "token_ledger.sqlite")
+
+
+def resolve_db_path(db_path: Union[str, Path] = DB_PATH) -> str:
+    """
+    Reroute any relative or unqualified SQLite database path to the OS-standard AppData directory.
+    Guarantees no .sqlite, .sqlite-wal, or .sqlite-shm files are created in the current working directory.
+    Preserves in-memory databases and explicit absolute paths.
+    """
+    path_str = str(db_path)
+    if path_str in (":memory:", ""):
+        return path_str or ":memory:"
+    p = Path(path_str)
+    if not p.is_absolute():
+        return str(get_app_data_dir() / p.name)
+    return str(p)
+
 
 _local = threading.local()
 
@@ -18,13 +65,14 @@ def _is_connection_valid(conn: sqlite3.Connection) -> bool:
         return False
 
 
-def get_db_connection(db_path: Union[str, Path] = "token_ledger.sqlite") -> sqlite3.Connection:
+def get_db_connection(db_path: Union[str, Path] = DB_PATH) -> sqlite3.Connection:
     """
     Fetch or initialize a thread-local SQLite database connection.
     Guarantees that background workers and the main thread never share connection instances.
     Configures WAL journaling, NORMAL synchronization, and 5000ms busy timeout.
+    Enforces OS-standard LocalAppData storage for database and journal artifacts.
     """
-    path_str = str(db_path)
+    path_str = resolve_db_path(db_path)
     if not hasattr(_local, "connections"):
         _local.connections: Dict[str, sqlite3.Connection] = {}
 
@@ -51,7 +99,7 @@ def close_thread_connection(db_path: Optional[Union[str, Path]] = None) -> None:
         return
 
     if db_path is not None:
-        path_str = str(db_path)
+        path_str = resolve_db_path(db_path)
         conn = _local.connections.pop(path_str, None)
         if conn is not None:
             try:

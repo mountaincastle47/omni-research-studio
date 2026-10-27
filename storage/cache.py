@@ -7,12 +7,13 @@ import threading
 from pathlib import Path
 from typing import Any, Optional, Union
 
-from core.database import get_db_connection
+from core.database import get_app_data_dir, get_db_connection
 
 _local = threading.local()
+DEFAULT_CACHE_DB = str(get_app_data_dir() / "cache.sqlite")
 
 
-def get_cache_db_connection(db_path: Union[str, Path] = "cache.sqlite") -> sqlite3.Connection:
+def get_cache_db_connection(db_path: Union[str, Path] = DEFAULT_CACHE_DB) -> sqlite3.Connection:
     """Fetch a thread-local SQLite database connection for persistent caching."""
     return get_db_connection(db_path)
 
@@ -20,7 +21,7 @@ def get_cache_db_connection(db_path: Union[str, Path] = "cache.sqlite") -> sqlit
 class StorageCache:
     """Thread-safe persistent cache backed by thread-local SQLite connections."""
 
-    def __init__(self, db_path: Union[str, Path] = "cache.sqlite") -> None:
+    def __init__(self, db_path: Union[str, Path] = DEFAULT_CACHE_DB) -> None:
         self.db_path = str(db_path)
         self._init_db()
 

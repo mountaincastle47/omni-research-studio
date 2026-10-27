@@ -7,12 +7,13 @@ import threading
 from pathlib import Path
 from typing import Any, List, Optional, Union
 
-from core.database import get_db_connection
+from core.database import get_app_data_dir, get_db_connection
 
 _local = threading.local()
+DEFAULT_HISTORY_DB = str(get_app_data_dir() / "history.sqlite")
 
 
-def get_history_db_connection(db_path: Union[str, Path] = "history.sqlite") -> sqlite3.Connection:
+def get_history_db_connection(db_path: Union[str, Path] = DEFAULT_HISTORY_DB) -> sqlite3.Connection:
     """Fetch a thread-local SQLite connection for execution history."""
     return get_db_connection(db_path)
 
@@ -20,7 +21,7 @@ def get_history_db_connection(db_path: Union[str, Path] = "history.sqlite") -> s
 class ExecutionHistory:
     """Thread-safe execution history manager backed by thread-local SQLite connections."""
 
-    def __init__(self, db_path: Union[str, Path] = "history.sqlite") -> None:
+    def __init__(self, db_path: Union[str, Path] = DEFAULT_HISTORY_DB) -> None:
         self.db_path = str(db_path)
         self._init_db()
 

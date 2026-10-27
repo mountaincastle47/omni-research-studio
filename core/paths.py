@@ -105,6 +105,14 @@ def resource_path(relative_path: str | Path) -> Path:
     return candidate
 
 
+def get_app_data_dir() -> Path:
+    """
+    Resolve the OS-standard application data root directory (%LOCALAPPDATA%/OmniResearchStudio on Windows).
+    """
+    from core.database import get_app_data_dir as _get_app_data_dir
+    return _get_app_data_dir()
+
+
 def get_asset_path(relative_path: str) -> str:
     """
     Safely locate static application assets (icons, locales, stylesheets, schemas).
@@ -119,3 +127,4 @@ CACHE_DIR = get_cache_dir()
 LOGS_DIR = get_logs_dir()
 SETTINGS_DIR = get_settings_dir()
 SESSION_CACHE_DIR = get_cache_dir()
+APP_DATA_DIR = get_app_data_dir()

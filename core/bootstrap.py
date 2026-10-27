@@ -72,8 +72,9 @@ def bootstrap_runtime(
     except Exception as e:
         logger.warning(f"Failed to initialize SQLite FTS5 schema during bootstrap: {e}")
 
-    # 4. Ensure Token Ledger SQLite database exists
-    ledger_db_path = target_cache / "token_ledger.sqlite"
+    # 4. Ensure Token Ledger SQLite database exists in LocalAppData
+    from core.database import DB_PATH
+    ledger_db_path = Path(DB_PATH)
     ledger_initialized = False
     try:
         from core.token_ledger import TokenLedger

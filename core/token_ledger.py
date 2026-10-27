@@ -8,11 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Optional
 
-from core.database import close_thread_connection, get_db_connection
-from core.paths import get_app_root, get_cache_dir
+from core.database import DB_PATH, close_thread_connection, get_db_connection
+from core.paths import get_app_root
 
 PROJECT_ROOT = get_app_root()
-DEFAULT_LEDGER_DB = get_cache_dir() / "token_ledger.sqlite"
+DEFAULT_LEDGER_DB = Path(DB_PATH)
 
 
 @dataclass
