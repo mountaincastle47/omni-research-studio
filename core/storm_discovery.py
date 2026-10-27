@@ -10,7 +10,10 @@ import concurrent.futures
 from urllib.parse import urlparse
 
 from google import genai
+import httpx
 from google.genai import types
+
+GEMINI_HTTPX_TIMEOUT = httpx.Timeout(connect=10.0, read=180.0, write=15.0, pool=10.0)
 
 from core.config import DEFAULT_DISCOVERY_MODEL
 from core.resilience import (
@@ -24,7 +27,15 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_random_
 
 def _is_retryable_gemini_error(exc: BaseException) -> bool:
     err_msg = str(exc).lower()
-    return "429" in err_msg or "resource_exhausted" in err_msg or "quota" in err_msg or is_rate_limit_error(exc)
+    return (
+        "429" in err_msg
+        or "resource_exhausted" in err_msg
+        or "quota" in err_msg
+        or "readtimeout" in err_msg
+        or "connecttimeout" in err_msg
+        or isinstance(exc, (httpx.ReadTimeout, httpx.ConnectTimeout))
+        or is_rate_limit_error(exc)
+    )
 
 
 @retry(
@@ -749,6 +760,10 @@ class OmniSweepDiscoveryAgent:
         config = types.GenerateContentConfig(
             system_instruction=QUERY_FORMULATION_DIRECTIVE,
             temperature=0.2,
+            http_options=types.HttpOptions(
+                timeout=180.0,
+                httpx_client=httpx.Client(timeout=GEMINI_HTTPX_TIMEOUT),
+            ),
         )
 
         response = _generate_content_with_retry(
@@ -832,7 +847,10 @@ class OmniSweepDiscoveryAgent:
             system_instruction=system_instruction,
             temperature=0.3,
             tools=[types.Tool(google_search=types.GoogleSearch())],
-            http_options=types.HttpOptions(timeout=30.0),
+            http_options=types.HttpOptions(
+                timeout=180.0,
+                httpx_client=httpx.Client(timeout=GEMINI_HTTPX_TIMEOUT),
+            ),
         )
 
         response = _generate_content_with_retry(

@@ -30,9 +30,9 @@ class InactivityWatchdog:
 
     def __init__(
         self,
-        timeout_seconds: float = 60.0,
-        stage_stall_limit: float = 90.0,
-        total_stall_limit: float = 600.0,
+        timeout_seconds: float = 180.0,
+        stage_stall_limit: float = 240.0,
+        total_stall_limit: float = 900.0,
         on_timeout: Optional[Callable[[str, float], None]] = None,
     ) -> None:
         self.timeout_seconds = timeout_seconds

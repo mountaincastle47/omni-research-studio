@@ -26,6 +26,20 @@ class TaskCancelledError(Exception):
     """Raised when a background task is cooperatively aborted by the user."""
 
 
+import httpx
+try:
+    import httpcore
+    HTTPCORE_TIMEOUTS = (httpcore.ReadTimeout, httpcore.ConnectTimeout)
+except ImportError:
+    HTTPCORE_TIMEOUTS = ()
+
+RETRYABLE_NETWORK_ERRORS = (
+    httpx.ReadTimeout,
+    httpx.ConnectTimeout,
+    *HTTPCORE_TIMEOUTS,
+)
+
+
 def is_rate_limit_error(exc: BaseException) -> bool:
     """Detect whether an exception corresponds to HTTP 429 or RESOURCE_EXHAUSTED."""
     if isinstance(exc, genai_errors.APIError):
@@ -37,6 +51,18 @@ def is_rate_limit_error(exc: BaseException) -> bool:
 
     text = str(exc).upper()
     return "429" in text or "RESOURCE_EXHAUSTED" in text or "RATE LIMIT" in text or "QUOTA" in text
+
+
+def is_retryable_network_error(exc: BaseException) -> bool:
+    """Detect whether an exception corresponds to an HTTPX/HTTPCORE read or connect timeout."""
+    if isinstance(exc, RETRYABLE_NETWORK_ERRORS):
+        return True
+    text = str(exc).lower()
+    return "readtimeout" in text or "connecttimeout" in text or "read timeout" in text or "timed out" in text
+
+
+def is_retryable_error(exc: BaseException) -> bool:
+    return is_rate_limit_error(exc) or is_retryable_network_error(exc)
 
 
 def sleep_with_cancel_check(
@@ -93,7 +119,10 @@ def call_with_exponential_backoff(
             if cancel_check and cancel_check():
                 raise TaskCancelledError("Task aborted by user.")
 
-            if not is_rate_limit_error(exc) or attempt >= max_retries:
+            is_rate_limit = is_rate_limit_error(exc)
+            is_net_timeout = is_retryable_network_error(exc)
+
+            if (not is_rate_limit and not is_net_timeout) or attempt >= max_retries:
                 raise
 
             attempt += 1
@@ -101,10 +130,16 @@ def call_with_exponential_backoff(
             jitter = random.uniform(0.0, min(1.0, base_delay * 0.25))
             wait_seconds = min(max_backoff, base_delay + jitter)
 
-            warn_msg = (
-                f"Rate limit (429 RESOURCE_EXHAUSTED) encountered. "
-                f"Retry attempt {attempt}/{max_retries} in {wait_seconds:.1f}s..."
-            )
+            if is_net_timeout:
+                warn_msg = (
+                    f"Gemini API / HTTP ReadTimeout encountered ({type(exc).__name__}). "
+                    f"Retry attempt {attempt}/{max_retries} with extended 180s headroom in {wait_seconds:.1f}s..."
+                )
+            else:
+                warn_msg = (
+                    f"Rate limit (429 RESOURCE_EXHAUSTED) encountered. "
+                    f"Retry attempt {attempt}/{max_retries} in {wait_seconds:.1f}s..."
+                )
             logger.warning(warn_msg)
             print(f"[WARNING] {warn_msg}", flush=True)
             if progress_callback is not None:

@@ -62,9 +62,9 @@ class BaseCancellableWorker(QThread):
         self._stage_start: float = time.monotonic()
         self._current_stage: str = "OmniSweep Discovery"
         self._watchdog_active: bool = False
-        self._watchdog_timeout: float = 60.0  # 60s inactivity watchdog limit (between heartbeats)
-        self._stage_stall_limit: float = 90.0  # 90s maximum stall in a single stage without progress
-        self._total_stall_limit: float = 600.0  # 10 min absolute ceiling for multi-perspective workflow
+        self._watchdog_timeout: float = 180.0  # 60s inactivity watchdog limit (between heartbeats)
+        self._stage_stall_limit: float = 240.0  # 90s maximum stall in a single stage without progress
+        self._total_stall_limit: float = 900.0  # 10 min absolute ceiling for multi-perspective workflow
         self.cache_manager: CacheManager = cache_manager or GLOBAL_CACHE
         from core.memory_guard import MemoryGuard
         self.finished.connect(lambda: MemoryGuard.clean())
@@ -301,6 +301,9 @@ class OmniSweepWorker(BaseCancellableWorker):
                     GLOBAL_COST_TRACKER.accumulate_chunk(task_id, 350)
                     self.telemetry_live.emit(GLOBAL_COST_TRACKER.get_live_totals().to_dict())
 
+                self.record_heartbeat("omnisweep_phase_1")
+                self._last_heartbeat = time.monotonic()
+                self._stage_start = time.monotonic()
                 result: OmniSweepDiscoveryResult = agent.run_discovery(
                     topic=self.topic,
                     perspectives=self.perspectives,
