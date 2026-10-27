@@ -1612,13 +1612,11 @@ class MainWindow(QMainWindow):
             return True
         if self.config_manager.has_api_key():
             return True
-        QMessageBox.warning(
-            self,
-            "Gemini API Key Required",
-            "GEMINI_API_KEY is not configured.\n\n"
-            "Please paste your Gemini API key into the top header key field and click 'Apply API Key' (or select a local model).",
-        )
-        self.api_banner._on_start_editing()
+        from ui.dialogs.api_key_dialog import ApiKeyDialog
+        dlg = ApiKeyDialog(lang=self.current_language, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted and self.config_manager.has_api_key():
+            self.api_banner.update_state(True)
+            return True
         return False
 
     def _set_status(self, message: str) -> None:

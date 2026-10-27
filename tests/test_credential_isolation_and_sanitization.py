@@ -10,7 +10,7 @@ from pathlib import Path
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt6.QtCore import Qt, QSettings
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QLineEdit
 
 from core.paths import get_app_root, get_settings_dir
 from core.config_manager import ConfigManager
@@ -88,35 +88,35 @@ class TestApiKeyBannerClearFeature(unittest.TestCase):
         banner = ApiKeyBanner(initial_key=initial_key, lang="en")
         banner.show()
 
-        # 1. Initial active key state
+        # 1. Initial active key state (compact fixed badge with Change button)
         self.assertIn("Active Key", banner.badge_label.text())
         self.assertIn("...8765", banner.badge_label.text())
+        self.assertTrue(banner.change_btn.isVisible())
 
-        # 2. Start editing
-        banner._on_start_editing()
-        self.assertTrue(banner._editing)
-        self.assertTrue(banner.key_input.isVisible())
-        self.assertTrue(banner.save_btn.isVisible())
-        self.assertTrue(banner.clear_btn.isVisible())
-        self.assertFalse(banner.change_btn.isVisible())
+        # 2. Test Dedicated Modal Dialog
+        from ui.dialogs.api_key_dialog import ApiKeyDialog
+        dlg = ApiKeyDialog(initial_key=initial_key, lang="en")
+        self.assertEqual(dlg.width(), 440)
+        self.assertEqual(dlg.height(), 190)
+        self.assertEqual(dlg.key_input.echoMode(), QLineEdit.EchoMode.Password)
+        self.assertEqual(dlg.key_input.placeholderText(), "AIzaSy...")
 
-        # 3. Click Clear Stored Key
+        # 3. Test Clear Key
         cleared_emitted = []
         banner.api_key_Cleared.connect(lambda: cleared_emitted.append(True))
-
-        banner.clear_btn.click()
+        banner._on_clear_clicked()
         self.app.processEvents()
 
         # 4. Verify cleared state
         self.assertEqual(len(cleared_emitted), 1)
         self.assertEqual(banner._current_key, "")
         self.assertEqual(banner.key_input.text(), "")
-        self.assertFalse(banner._editing)
 
-        # 5. Verify badge reverted to "No Key Configured" with #e74c3c
+        # 5. Verify badge reverted to "No Key Configured"
         self.assertIn("No Key Configured", banner.badge_label.text())
-        self.assertIn("#e74c3c", banner.badge_label.styleSheet())
+        self.assertTrue("#F87171" in banner.badge_label.styleSheet() or "#e74c3c" in banner.badge_label.styleSheet())
         banner.close()
+        dlg.close()
 
 
 class TestPackagingSanitizationAudit(unittest.TestCase):

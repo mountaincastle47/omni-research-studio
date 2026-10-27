@@ -89,25 +89,25 @@ class TestUiResilienceAndCancellation(unittest.TestCase):
         banner = ApiKeyBanner(initial_key="", lang="en")
         banner.show()
 
-        # Constrained input box
-        self.assertEqual(banner.key_input.maximumWidth(), 320)
-        self.assertEqual(banner.key_input.echoMode(), QLineEdit.EchoMode.Password)
+        # Fixed size policy & no inline QLineEdit in layout
+        self.assertEqual(banner.layout().count(), 2)  # badge_label and change_btn
+        self.assertTrue(banner.change_btn.isVisible())
+        self.assertIn("No Key Configured", banner.badge_label.text())
 
         # Fixed layout constraint
         layout = banner.layout()
         self.assertEqual(layout.sizeConstraint(), QLayout.SizeConstraint.SetFixedSize)
-
-        # Editing cursor position
-        banner._on_start_editing()
-        self.assertEqual(banner.key_input.cursorPosition(), 0)
         banner.close()
 
     def test_api_key_dialog_constraints(self) -> None:
         dlg = ApiKeyDialog(initial_key="", lang="en")
-        self.assertEqual(dlg.key_input.maximumWidth(), 320)
+        # Fixed 440 x 190 sizing
+        self.assertEqual(dlg.width(), 440)
+        self.assertEqual(dlg.height(), 190)
+        self.assertEqual(dlg.windowModality(), Qt.WindowModality.ApplicationModal)
         self.assertEqual(dlg.key_input.echoMode(), QLineEdit.EchoMode.Password)
         self.assertEqual(dlg.key_input.cursorPosition(), 0)
-        self.assertEqual(dlg.layout().sizeConstraint(), QLayout.SizeConstraint.SetFixedSize)
+        self.assertEqual(dlg.key_input.placeholderText(), "AIzaSy...")
         dlg.close()
 
     def test_task_runner_cooperative_cancellation(self) -> None:

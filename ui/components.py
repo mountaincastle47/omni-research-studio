@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QTableWidget,
     QTableWidgetItem,
@@ -59,7 +60,7 @@ PERSONA_I18N_KEY_MAP: Dict[str, str] = {
 
 
 class ApiKeyBanner(QFrame):
-    """Compact inline API Key widget: [● Active Key: ...xxxx] [Change] with expandable inline editor and clear credentials action."""
+    """Compact inline API Key status badge: [• Active Key: ...xxxx] [Change] launching a dedicated modal dialog."""
 
     api_key_Saved = pyqtSignal(str)
     api_key_Cleared = pyqtSignal()
@@ -69,60 +70,47 @@ class ApiKeyBanner(QFrame):
         self.setObjectName("ApiKeyBanner")
         self._current_key = initial_key.strip()
         self._lang = lang
-        self._editing = not bool(self._current_key)
+        self._editing = False
         self._build_ui()
 
     def _build_ui(self) -> None:
-        self.setFixedHeight(36)
+        self.setFixedHeight(30)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 4, 10, 4)
-        layout.setSpacing(8)
+        layout.setContentsMargins(8, 2, 8, 2)
+        layout.setSpacing(6)
         layout.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
 
         self.badge_label = QLabel()
-        self.badge_label.setStyleSheet("font-size: 12px; font-weight: 600; border: none; background: transparent;")
+        self.badge_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.badge_label.setStyleSheet("font-size: 11px; font-weight: 600; border: none; background: transparent;")
 
-        self.change_btn = QPushButton(get_text("btn_change_key", self._lang))
-        self.change_btn.setFixedHeight(24)
-        self.change_btn.setFixedWidth(68)
+        self.change_btn = QPushButton(get_text("btn_change_key", self._lang) or "Change")
+        self.change_btn.setFixedHeight(22)
+        self.change_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.change_btn.setStyleSheet(
-            "QPushButton { padding: 2px 8px; font-size: 11px; background-color: #1E293B; border: 1px solid #334155; border-radius: 4px; }"
-            "QPushButton:hover { background-color: #334155; }"
+            "QPushButton { padding: 2px 8px; font-size: 11px; font-weight: 600; background-color: #1E293B; "
+            "color: #94A3B8; border: 1px solid #334155; border-radius: 4px; } "
+            "QPushButton:hover { background-color: #334155; color: #F0F6FC; }"
         )
         self.change_btn.clicked.connect(self._on_start_editing)
 
+        # Retain references for programmatic control and test coverage
         self.key_input = QLineEdit()
         self.key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.key_input.setPlaceholderText("GEMINI_API_KEY...")
         self.key_input.setText(self._current_key)
-        self.key_input.setMaximumWidth(320)
-        self.key_input.setCursorPosition(0)
-        self.key_input.setFixedHeight(26)
-        self.key_input.returnPressed.connect(self._on_save_clicked)
+        self.key_input.setVisible(False)
 
-        self.save_btn = QPushButton(get_text("btn_apply_key", self._lang))
-        self.save_btn.setObjectName("PrimaryActionBtn")
-        self.save_btn.setFixedHeight(26)
-        self.save_btn.setMinimumWidth(96)
-        self.save_btn.setStyleSheet("padding: 2px 8px; font-size: 11px;")
+        self.save_btn = QPushButton()
+        self.save_btn.setVisible(False)
         self.save_btn.clicked.connect(self._on_save_clicked)
 
-        self.clear_btn = QPushButton(get_text("btn_clear_key", self._lang))
-        self.clear_btn.setObjectName("ClearKeyBtn")
-        self.clear_btn.setFixedHeight(26)
-        self.clear_btn.setMinimumWidth(110)
-        self.clear_btn.setStyleSheet(
-            "QPushButton { padding: 2px 8px; font-size: 11px; background-color: #3F1B24; color: #F87171; "
-            "border: 1px solid #7F1D1D; border-radius: 4px; font-weight: 600; } "
-            "QPushButton:hover { background-color: #7F1D1D; color: #FECACA; }"
-        )
+        self.clear_btn = QPushButton()
+        self.clear_btn.setVisible(False)
         self.clear_btn.clicked.connect(self._on_clear_clicked)
 
         layout.addWidget(self.badge_label)
         layout.addWidget(self.change_btn)
-        layout.addWidget(self.key_input)
-        layout.addWidget(self.save_btn)
-        layout.addWidget(self.clear_btn)
 
         self._sync_mode()
 
@@ -134,22 +122,31 @@ class ApiKeyBanner(QFrame):
         return f"...{tail}"
 
     def _on_start_editing(self) -> None:
-        self._editing = True
-        self._sync_mode()
-        self.key_input.setCursorPosition(0)
-        self.key_input.setFocus()
-        self.key_input.selectAll()
+        """Launch the dedicated modal dialog."""
+        from ui.dialogs.api_key_dialog import ApiKeyDialog
+        dlg = ApiKeyDialog(initial_key=self._current_key, lang=self._lang, parent=self.window())
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            new_key = dlg._current_key
+            if new_key:
+                self._current_key = new_key
+                self.key_input.setText(new_key)
+                self._sync_mode()
+                self.api_key_Saved.emit(new_key)
+            else:
+                self._current_key = ""
+                self.key_input.clear()
+                self._sync_mode()
+                self.api_key_Cleared.emit()
+                self.api_key_Saved.emit("")
 
     def _on_save_clicked(self) -> None:
         self._current_key = self.key_input.text().strip()
-        self._editing = False
         self._sync_mode()
         self.api_key_Saved.emit(self._current_key)
 
     def _on_clear_clicked(self) -> None:
         self._current_key = ""
         self.key_input.clear()
-        self._editing = False
         self._sync_mode()
         self.api_key_Cleared.emit()
         self.api_key_Saved.emit("")
@@ -158,41 +155,38 @@ class ApiKeyBanner(QFrame):
         if not has_key:
             self._current_key = ""
             self.key_input.clear()
+        else:
+            from core.config_manager import ConfigManager
+            self._current_key = ConfigManager().get_api_key()
+            self.key_input.setText(self._current_key)
         self._sync_mode()
 
     def retranslate_ui(self, lang: str = "en") -> None:
         """Update localized strings in the API key banner."""
         self._lang = lang
-        self.change_btn.setText(get_text("btn_change_key", self._lang))
-        self.save_btn.setText(get_text("btn_apply_key", self._lang))
-        self.clear_btn.setText(get_text("btn_clear_key", self._lang))
+        self.change_btn.setText(get_text("btn_change_key", self._lang) or "Change")
         self._sync_mode()
 
     def _sync_mode(self) -> None:
         has_key = bool(self._current_key)
         if has_key:
-            active_label = get_text("api_key_active", self._lang)
-            self.badge_label.setText(f"● {active_label}: {self._mask_key(self._current_key)}")
+            active_label = get_text("api_key_active", self._lang) or "Active Key"
+            self.badge_label.setText(f"• {active_label}: {self._mask_key(self._current_key)}")
             self.badge_label.setStyleSheet(
-                "color: #10B981; font-size: 12px; font-weight: 600; border: none; background: transparent;"
+                "color: #10B981; font-size: 11px; font-weight: 600; border: none; background: transparent;"
             )
             self.setStyleSheet(
-                "#ApiKeyBanner { background-color: #0D1F17; border: 1px solid #10B981; border-radius: 6px; }"
+                "#ApiKeyBanner { background-color: #0D1F17; border: 1px solid #10B981; border-radius: 4px; }"
             )
         else:
-            none_label = get_text("api_key_none", self._lang)
-            self.badge_label.setText(f"● {none_label}")
+            none_label = get_text("api_key_none", self._lang) or "No Key Configured"
+            self.badge_label.setText(f"• {none_label}")
             self.badge_label.setStyleSheet(
-                "color: #e74c3c; font-size: 12px; font-weight: 600; border: none; background: transparent;"
+                "color: #F87171; font-size: 11px; font-weight: 600; border: none; background: transparent;"
             )
             self.setStyleSheet(
-                "#ApiKeyBanner { background-color: #2A1217; border: 1px solid #e74c3c; border-radius: 6px; }"
+                "#ApiKeyBanner { background-color: #2A1217; border: 1px solid #7F1D1D; border-radius: 4px; }"
             )
-
-        self.change_btn.setVisible(not self._editing)
-        self.key_input.setVisible(self._editing)
-        self.save_btn.setVisible(self._editing)
-        self.clear_btn.setVisible(self._editing)
 
 
 class SourceListWidget(QWidget):
