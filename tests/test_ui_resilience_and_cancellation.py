@@ -181,6 +181,71 @@ class TestUiResilienceAndCancellation(unittest.TestCase):
         self.assertGreaterEqual(len(received), 1)
         self.assertEqual(received[0][0], "test_stage")
 
+    def test_radar_chart_paint_and_directional_alignment(self) -> None:
+        from ui.balance_radar import EpistemicBalanceWidget
+        widget = EpistemicBalanceWidget(lang="en")
+        widget.resize(260, 220)
+        widget.show()
+        self.app.processEvents()
+
+        # Update scores
+        widget.authority_score = 0.8
+        widget.linguistic_score = 0.65
+        widget.dispersion_score = 0.9
+        widget.canvas.repaint()
+        self.app.processEvents()
+
+        # Korean translation
+        widget.retranslate_ui("ko")
+        widget.canvas.repaint()
+        self.app.processEvents()
+        self.assertEqual(widget.canvas.minimumSize().width(), 250)
+        self.assertEqual(widget.canvas.minimumSize().height(), 200)
+        widget.close()
+
+    def test_sqlite_cross_thread_isolation(self) -> None:
+        import threading
+        from core.token_ledger import TokenLedger
+        import tempfile
+        import os
+
+        with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as tf:
+            db_path = tf.name
+
+        try:
+            ledger = TokenLedger(db_path=db_path)
+            errors = []
+
+            def worker_task(thread_id: int) -> None:
+                try:
+                    for i in range(5):
+                        ledger.record_manual(
+                            model=f"model_{thread_id}",
+                            prompt_tokens=100 * (i + 1),
+                            candidate_tokens=50 * (i + 1),
+                            session_id=f"session_{thread_id}",
+                        )
+                    totals = ledger.get_session_totals(f"session_{thread_id}")
+                    if totals.prompt_tokens <= 0:
+                        errors.append(f"Thread {thread_id} got empty totals")
+                except Exception as exc:
+                    errors.append(f"Thread {thread_id} failed: {exc}")
+
+            threads = [threading.Thread(target=worker_task, args=(tid,)) for tid in range(5)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=5.0)
+
+            self.assertEqual(errors, [], f"Cross-thread SQLite errors detected: {errors}")
+            ledger.close()
+        finally:
+            if os.path.exists(db_path):
+                try:
+                    os.remove(db_path)
+                except Exception:
+                    pass
+
 
 if __name__ == "__main__":
     unittest.main()

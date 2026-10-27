@@ -7,6 +7,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import List, Optional, Sequence
 
+from core.database import get_db_connection
 from core.document_loader import SourceDocument
 
 
@@ -36,8 +37,19 @@ class CorpusSearchIndex:
 
     def __init__(self, db_path: str = ":memory:") -> None:
         self.db_path = db_path
-        self._con = sqlite3.connect(db_path)
+        if str(db_path) == ":memory:":
+            self._in_memory_con: Optional[sqlite3.Connection] = sqlite3.connect(
+                ":memory:", check_same_thread=False, timeout=30.0
+            )
+        else:
+            self._in_memory_con = None
         self._init_db()
+
+    @property
+    def _con(self) -> sqlite3.Connection:
+        if self._in_memory_con is not None:
+            return self._in_memory_con
+        return get_db_connection(self.db_path)
 
     def _init_db(self) -> None:
         with self._con:

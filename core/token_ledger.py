@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Optional
 
+from core.database import close_thread_connection, get_db_connection
 from core.paths import get_app_root, get_cache_dir
 
 PROJECT_ROOT = get_app_root()
@@ -47,11 +48,20 @@ class TokenLedger:
     _instance: Optional[TokenLedger] = None
 
     def __init__(self, db_path: Path | str = DEFAULT_LEDGER_DB) -> None:
-        if str(db_path) != ":memory:":
-            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db_path = str(db_path)
-        self._con = sqlite3.connect(self.db_path)
+        if self.db_path != ":memory:":
+            Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+            self._in_memory_con: Optional[sqlite3.Connection] = None
+        else:
+            self._in_memory_con = sqlite3.connect(":memory:", check_same_thread=False, timeout=30.0)
         self._init_db()
+
+    @property
+    def _con(self) -> sqlite3.Connection:
+        """Return a thread-local SQLite connection scoped to the executing thread."""
+        if self._in_memory_con is not None:
+            return self._in_memory_con
+        return get_db_connection(self.db_path)
 
     @classmethod
     def get_instance(cls) -> TokenLedger:
@@ -229,10 +239,13 @@ class TokenLedger:
                 self._con.execute("DELETE FROM session_tokens")
 
     def close(self) -> None:
-        try:
-            self._con.close()
-        except Exception:
-            pass
+        if self._in_memory_con is not None:
+            try:
+                self._in_memory_con.close()
+            except Exception:
+                pass
+        else:
+            close_thread_connection(self.db_path)
 
 
 GLOBAL_LEDGER = TokenLedger()

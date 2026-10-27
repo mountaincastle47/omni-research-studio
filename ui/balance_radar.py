@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List, Optional
 
-from PyQt6.QtCore import QPointF, Qt
+from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QPolygonF
 from PyQt6.QtWidgets import QFrame, QLabel, QVBoxLayout, QWidget
 
@@ -36,7 +36,7 @@ class EpistemicBalanceWidget(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(6)
 
         # Header Title
@@ -44,9 +44,9 @@ class EpistemicBalanceWidget(QWidget):
         self.title_label.setStyleSheet("color: #38BDF8; font-weight: 700; font-size: 11px;")
         layout.addWidget(self.title_label)
 
-        # Radar Canvas
+        # Radar Canvas with guaranteed layout margins
         self.canvas = _RadarCanvas(self)
-        self.canvas.setMinimumSize(220, 180)
+        self.canvas.setMinimumSize(250, 200)
         layout.addWidget(self.canvas, stretch=1)
 
         # Bias Warning Banner
@@ -167,8 +167,11 @@ class _RadarCanvas(QWidget):
         w = self.width()
         h = self.height()
         cx = w / 2.0
-        cy = h / 2.0 + 8.0
-        radius = min(w, h) * 0.36
+        cy = h / 2.0 + 4.0
+
+        # Maintain at least 20px buffer from outer borders for text rendering
+        radius = min(w * 0.28, h * 0.32)
+        radius = max(35.0, min(75.0, radius))
 
         # 3 Axes at 90 deg (top), 210 deg (bottom-left), 330 deg (bottom-right)
         angles = [-math.pi / 2, -math.pi / 2 + (2 * math.pi / 3), -math.pi / 2 + (4 * math.pi / 3)]
@@ -217,19 +220,42 @@ class _RadarCanvas(QWidget):
             painter.drawEllipse(pt, 3.5, 3.5)
 
         # 4. Axis Labels
+        # Format label text into two lines (metric name on line 1, percentage on line 2): f"{name}\n{int(score * 100)}%"
         lang = self._parent_widget._lang
+        axis_names = [
+            get_text('radar_axis_authority', lang),
+            get_text('radar_axis_linguistic', lang),
+            get_text('radar_axis_dispersion', lang),
+        ]
         labels = [
-            f"{get_text('radar_axis_authority', lang)}: {int(scores[0]*100)}%",
-            f"{get_text('radar_axis_linguistic', lang)}: {int(scores[1]*100)}%",
-            f"{get_text('radar_axis_dispersion', lang)}: {int(scores[2]*100)}%",
+            f"{name}\n{int(score * 100)}%"
+            for name, score in zip(axis_names, scores)
         ]
 
         painter.setFont(QFont("-apple-system, sans-serif", 8, QFont.Weight.Bold))
         painter.setPen(QColor("#94A3B8"))
 
-        # Top label
-        painter.drawText(int(cx - 80), int(cy - radius - 6), 160, 16, Qt.AlignmentFlag.AlignCenter, labels[0])
-        # Bottom-left label
-        painter.drawText(int(cx - radius * 1.15 - 50), int(cy + radius * 0.65), 140, 16, Qt.AlignmentFlag.AlignRight, labels[1])
-        # Bottom-right label
-        painter.drawText(int(cx + radius * 0.2), int(cy + radius * 0.65), 140, 16, Qt.AlignmentFlag.AlignLeft, labels[2])
+        # Outer spoke vertex coordinates
+        x0 = cx + radius * math.cos(angles[0])
+        y0 = cy + radius * math.sin(angles[0])
+
+        x1 = cx + radius * math.cos(angles[1])
+        y1 = cy + radius * math.sin(angles[1])
+
+        x2 = cx + radius * math.cos(angles[2])
+        y2 = cy + radius * math.sin(angles[2])
+
+        # Top Vertex ("Authority Ratio" / "1차 문헌 비율"):
+        # Anchor above the point using Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom
+        top_rect = QRectF(x0 - 90, y0 - 36, 180, 32)
+        painter.drawText(top_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, labels[0])
+
+        # Bottom-Left Vertex ("Global Diversity" / "다국어 다원성"):
+        # Anchor strictly to the left of the vertex using Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop with an 8px offset (x - 8, y + 4)
+        bl_rect = QRectF(x1 - 8 - 140, y1 + 4, 140, 36)
+        painter.drawText(bl_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop, labels[1])
+
+        # Bottom-Right Vertex ("Perspective Spread" / "시각 분산도"):
+        # Anchor strictly to the right of the vertex using Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop with an 8px offset (x + 8, y + 4)
+        br_rect = QRectF(x2 + 8, y2 + 4, 140, 36)
+        painter.drawText(br_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, labels[2])
