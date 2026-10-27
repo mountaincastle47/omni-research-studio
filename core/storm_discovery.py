@@ -759,7 +759,7 @@ class OmniSweepDiscoveryAgent:
         config = types.GenerateContentConfig(
             system_instruction=QUERY_FORMULATION_DIRECTIVE,
             temperature=0.2,
-            http_options=types.HttpOptions(timeout=180.0),
+            http_options=types.HttpOptions(timeout=180000.0),
         )
 
         response = _generate_content_with_retry(
@@ -843,7 +843,7 @@ class OmniSweepDiscoveryAgent:
             system_instruction=system_instruction,
             temperature=0.3,
             tools=[types.Tool(google_search=types.GoogleSearch())],
-            http_options=types.HttpOptions(timeout=180.0),
+            http_options=types.HttpOptions(timeout=180000.0),
         )
 
         response = _generate_content_with_retry(
