@@ -117,6 +117,8 @@ from ui.search_drawer import SearchDockWidget
 from ui.source_dock import SourceInspectorDock
 from ui.theme_manager import AVAILABLE_FONTS, THEMES, ThemeManager
 from ui.vault_dialog import VaultSyncDialog
+from ui.dialogs.timeout_dialog import DiagnosticTimeoutDialog, play_warning_alert
+from ui.status_bar import SPINNER_FRAMES
 from ui.workspace_tabs import ResearchWorkspaceTabs, WorkspaceReportPane, auto_tab_title
 from ui.workers import (
     AudioWorker,
@@ -726,6 +728,18 @@ class MainWindow(QMainWindow):
         strip_layout.setContentsMargins(10, 5, 10, 5)
         strip_layout.setSpacing(12)
 
+        self.spinner_label = QLabel("")
+        self.spinner_label.setObjectName("StatusSpinnerLabel")
+        self.spinner_label.setStyleSheet("color: #38BDF8; font-size: 13px; font-weight: bold; border: none; background: transparent;")
+        self.spinner_label.setFixedWidth(16)
+        self.spinner_label.setVisible(False)
+        strip_layout.addWidget(self.spinner_label)
+
+        self._spinner_idx = 0
+        self._spinner_timer = QTimer(self)
+        self._spinner_timer.setInterval(100)
+        self._spinner_timer.timeout.connect(self._on_spinner_tick)
+
         self.status_label = QLabel(get_text("welcome_step1", self.current_language))
         self.status_label.setStyleSheet("color: #C9D1D9; font-size: 12px; border: none; background: transparent;")
 
@@ -1293,9 +1307,17 @@ class MainWindow(QMainWindow):
 
     # --- Universal Task Locking, Progress & Cooperative Cancellation ---
 
+    def _on_spinner_tick(self) -> None:
+        self._spinner_idx = (self._spinner_idx + 1) % len(SPINNER_FRAMES)
+        self.spinner_label.setText(SPINNER_FRAMES[self._spinner_idx])
+
     def _begin_task(self, worker: BaseCancellableWorker, initial_status: str) -> None:
         """Lock action buttons, reveal the red Cancel button, and connect progress/streaming/cancellation signals."""
         self.active_worker = worker
+        self.spinner_label.setText(SPINNER_FRAMES[0])
+        self.spinner_label.setVisible(True)
+        self._spinner_timer.start()
+        self.progress_bar.setRange(0, 0)
         self.run_sweep_btn.setEnabled(False)
         self.synthesize_btn.setEnabled(False)
         self.generate_audio_btn.setEnabled(False)
@@ -1326,11 +1348,24 @@ class MainWindow(QMainWindow):
         worker.cancelled.connect(self._on_worker_cancelled)
         if hasattr(worker, "task_canceled"):
             worker.task_canceled.connect(self._on_worker_cancelled)
+        if hasattr(worker, "task_timed_out"):
+            worker.task_timed_out.connect(self._on_worker_timed_out)
 
     _track_worker = _begin_task
 
     def _end_task(self, reset_progress: bool = False) -> None:
         """Unlock UI buttons and hide the Cancel button when a task finishes, fails, or cancels."""
+        if hasattr(self, "_spinner_timer") and self._spinner_timer.isActive():
+            self._spinner_timer.stop()
+        if hasattr(self, "spinner_label"):
+            self.spinner_label.setText("")
+            self.spinner_label.setVisible(False)
+        self.progress_bar.setRange(0, 100)
+        if self.active_worker:
+            try:
+                self.active_worker.wait(1000)
+            except Exception:
+                pass
         self.active_worker = None
         self.run_sweep_btn.setEnabled(True)
         self.synthesize_btn.setEnabled(True)
@@ -1391,7 +1426,12 @@ class MainWindow(QMainWindow):
             self._on_worker_cancelled()
 
     def _on_worker_detailed_progress(self, percentage: int, eta_seconds: int, status_text: str) -> None:
-        self.progress_bar.setValue(max(0, min(100, percentage)))
+        if percentage > 0:
+            if self.progress_bar.maximum() == 0:
+                self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(max(0, min(100, percentage)))
+        else:
+            self.progress_bar.setRange(0, 0)
         if status_text == "CACHE_HIT":
             self._update_eta_display(0, is_ready=True)
             self._set_status(get_text("status_cache_hit", self.current_language))
@@ -1619,7 +1659,23 @@ class MainWindow(QMainWindow):
             return True
         return False
 
+    def _on_worker_timed_out(self, stage: str, idle_seconds: float) -> None:
+        """Handle background worker inactivity watchdog timeout."""
+        play_warning_alert()
+        self._end_task(reset_progress=True)
+        self._set_status(get_text("status_cancelled", self.current_language))
+        dlg = DiagnosticTimeoutDialog(
+            current_stage=stage,
+            elapsed_seconds=idle_seconds,
+            lang=self.current_language,
+            parent=self,
+        )
+        dlg.exec()
+
     def _set_status(self, message: str) -> None:
+        token = message.strip()
+        if token in ("omnisweep_phase_1", "omnisweep_phase_2", "omnisweep_phase_3", "omnisweep_phase_4", "status_ready"):
+            message = get_text(token, self.current_language)
         self.status_label.setText(message)
 
     # --- OmniSweep Discovery Execution ---

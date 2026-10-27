@@ -267,5 +267,14 @@
   "zoom_in_graph": "Zoom In",
   "zoom_out": "Zoom Out",
   "zoom_out_graph": "Zoom Out",
-  "zoom_reset": "Reset Zoom"
+  "zoom_reset": "Reset Zoom",
+  "omnisweep_phase_1": "[1/4] Initializing OmniSweep discovery...",
+  "omnisweep_phase_2": "[2/4] Executing perspective search queries...",
+  "omnisweep_phase_3": "[3/4] Ingesting and extracting source passages...",
+  "omnisweep_phase_4": "[4/4] Synthesizing multi-perspective perspective report...",
+  "status_ready": "Ready",
+  "timeout_dialog_title": "Task Execution Timed Out",
+  "timeout_dialog_header": "[OmniSweep Watchdog] Operation aborted due to lack of network activity (>60s).",
+  "timeout_dialog_causes": "Potential Root Causes:\n1. Google Gemini API network congestion or rate-limit throttling.\n2. Active API key quota exhausted or invalid token permissions.\n3. Intermittent DNS resolution failure or packet loss during source scraping.\n4. Firewall, VPN, or proxy intercepting persistent TLS socket streams.",
+  "timeout_dialog_recommendations": "Recommendations:\n• Verify your internet connection.\n• Inspect quota in Google AI Studio.\n• Retry with a refined topic prompt."
 }

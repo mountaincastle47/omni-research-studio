@@ -626,6 +626,23 @@ STRINGS: Dict[str, Dict[str, str]] = {
     "compute_status_applied": {"en": "Compute profile applied immediately.", "ko": "연산 프로필이 즉시 적용되었습니다."},
     "compute_hardware_info": {"en": "Hardware Acceleration Details", "ko": "하드웨어 가속 세부 정보"},
     "compute_vulkan": {"en": "Vulkan GPU (FP32)", "ko": "Vulkan GPU 가속 (FP32)"},
+
+    # Worker Telemetry Localization & Timeout Diagnostics
+    "omnisweep_phase_1": {"en": "[1/4] Initializing OmniSweep discovery...", "ko": "[1/4] 다각도 웹 탐색 초기화 중..."},
+    "omnisweep_phase_2": {"en": "[2/4] Executing perspective search queries...", "ko": "[2/4] 관점별 세부 웹 검색 실행 중..."},
+    "omnisweep_phase_3": {"en": "[3/4] Ingesting and extracting source passages...", "ko": "[3/4] 참조 소스 본문 추출 및 분석 중..."},
+    "omnisweep_phase_4": {"en": "[4/4] Synthesizing multi-perspective perspective report...", "ko": "[4/4] 다각도 종합 보고서 생성 중..."},
+    "status_ready": {"en": "Ready", "ko": "대기 중"},
+    "timeout_dialog_title": {"en": "Task Execution Timed Out", "ko": "작업 시간 초과"},
+    "timeout_dialog_header": {"en": "[OmniSweep Watchdog] Operation aborted due to lack of network activity (>60s).", "ko": "[OmniSweep 워치독] 네트워크 응답이 60초 이상 지연되어 작업을 안전하게 중단했습니다."},
+    "timeout_dialog_causes": {
+        "en": "Potential Root Causes:\n1. Google Gemini API network congestion or rate-limit throttling.\n2. Active API key quota exhausted or invalid token permissions.\n3. Intermittent DNS resolution failure or packet loss during source scraping.\n4. Firewall, VPN, or proxy intercepting persistent TLS socket streams.",
+        "ko": "예상 원인:\n1. Google Gemini API 네트워크 지연 또는 요청 한도 초과.\n2. API 키 할당량 소진 또는 권한 설정 문제.\n3. 소스 스크래핑 중 일시적 DNS 확인 실패 또는 패킷 손실.\n4. 방화벽, VPN 또는 프록시 환경의 연결 차단.",
+    },
+    "timeout_dialog_recommendations": {
+        "en": "Recommendations:\n• Verify your internet connection.\n• Inspect quota in Google AI Studio.\n• Retry with a refined topic prompt.",
+        "ko": "해결 권장사항:\n• 인터넷 연결 상태를 확인하세요.\n• Google AI Studio에서 사용량 및 할당량을 확인하세요.\n• 검색 주제나 프롬프트를 조정한 후 다시 시도하세요.",
+    },
 }
 
 import logging

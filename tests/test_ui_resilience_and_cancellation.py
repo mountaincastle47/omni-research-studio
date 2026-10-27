@@ -10,6 +10,7 @@ from ui.status_bar import StatusEtaWidget, OmniStatusBar
 from ui.document_panel import DocumentToolbar
 from ui.components import ApiKeyBanner
 from ui.dialogs.api_key_dialog import ApiKeyDialog
+from ui.dialogs.timeout_dialog import DiagnosticTimeoutDialog
 from ui.workers import BaseCancellableWorker
 from core.task_runner import TaskCancellationContext, TaskRunner
 
@@ -117,6 +118,68 @@ class TestUiResilienceAndCancellation(unittest.TestCase):
         runner.cancel_active()
         self.assertTrue(ctx.is_cancelled())
         self.assertTrue(ctx.stop_requested.is_set())
+
+    def test_diagnostic_timeout_dialog_rendering(self) -> None:
+        dlg = DiagnosticTimeoutDialog(current_stage="omnisweep_phase_2", elapsed_seconds=61.2, lang="en")
+        self.assertEqual(dlg.width(), 520)
+        self.assertEqual(dlg.height(), 360)
+        self.assertEqual(dlg.windowModality(), Qt.WindowModality.ApplicationModal)
+        self.assertIn("Timed Out", dlg.windowTitle())
+        dlg.close()
+
+        # In Korean
+        dlg_ko = DiagnosticTimeoutDialog(current_stage="omnisweep_phase_2", elapsed_seconds=61.2, lang="ko")
+        self.assertIn("작업 시간 초과", dlg_ko.windowTitle())
+        dlg_ko.close()
+
+    def test_omni_status_bar_spinner_and_reset(self) -> None:
+        bar = OmniStatusBar(lang="en")
+        bar.show()
+        self.assertFalse(bar.spinner_label.isVisible())
+        self.assertEqual(bar.progress_bar.minimum(), 0)
+        self.assertEqual(bar.progress_bar.maximum(), 100)
+
+        # Start busy
+        bar.start_busy("omnisweep_phase_1")
+        self.assertTrue(bar.spinner_label.isVisible())
+        self.assertTrue(bar.spinner_timer.isActive())
+        self.assertEqual(bar.progress_bar.minimum(), 0)
+        self.assertEqual(bar.progress_bar.maximum(), 0)
+        self.assertTrue(bar.btn_cancel.isVisible())
+
+        # Progress update
+        bar.set_progress(45, eta_seconds=12)
+        self.assertEqual(bar.progress_bar.minimum(), 0)
+        self.assertEqual(bar.progress_bar.maximum(), 100)
+        self.assertEqual(bar.progress_bar.value(), 45)
+
+        # Reset
+        bar.reset_state()
+        self.assertFalse(bar.spinner_label.isVisible())
+        self.assertFalse(bar.spinner_timer.isActive())
+        self.assertEqual(bar.progress_bar.value(), 0)
+        self.assertFalse(bar.btn_cancel.isVisible())
+        bar.close()
+
+    def test_base_worker_watchdog_timeout_signal(self) -> None:
+        import time
+        worker = BaseCancellableWorker()
+        worker._watchdog_timeout = 0.15  # fast timeout for testing
+        worker._total_stall_limit = 0.5
+
+        received = []
+        worker.task_timed_out.connect(lambda stage, elapsed: received.append((stage, elapsed)))
+
+        worker.start_watchdog("test_stage")
+        time.sleep(0.35)
+        self.app.processEvents()
+        worker.stop_watchdog()
+        self.app.processEvents()
+
+        self.assertTrue(worker.is_cancelled())
+        self.assertTrue(worker.stop_requested.is_set())
+        self.assertGreaterEqual(len(received), 1)
+        self.assertEqual(received[0][0], "test_stage")
 
 
 if __name__ == "__main__":

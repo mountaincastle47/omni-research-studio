@@ -32,7 +32,13 @@ from core.storm_discovery import OmniSweepDiscoveryAgent, OmniSweepDiscoveryResu
 from core.translator import TRANSLATION_MODEL, MarkdownTranslator
 
 
+import socket
 import threading
+
+# Enforce strict 30-second socket timeout across all worker network interactions
+DEFAULT_WORKER_SOCKET_TIMEOUT: float = 30.0
+socket.setdefaulttimeout(DEFAULT_WORKER_SOCKET_TIMEOUT)
+
 
 class BaseCancellableWorker(QThread):
     """Base QThread supporting cooperative cancellation, live streaming chunks, and interpolated ETA updates."""
@@ -44,15 +50,57 @@ class BaseCancellableWorker(QThread):
     cache_Hit = pyqtSignal()
     cancelled = pyqtSignal()
     task_canceled = pyqtSignal()
+    task_timed_out = pyqtSignal(str, float)  # (stage: str, idle_seconds: float)
 
     def __init__(self, cache_manager: Optional[CacheManager] = None) -> None:
         super().__init__()
         self.stop_requested = threading.Event()
         self._is_cancelled: bool = False
+        self._last_heartbeat: float = time.monotonic()
+        self._task_start: float = time.monotonic()
+        self._current_stage: str = "OmniSweep Discovery"
+        self._watchdog_active: bool = False
+        self._watchdog_timeout: float = 60.0  # 60s inactivity watchdog limit
+        self._total_stall_limit: float = 90.0  # 90s total stall limit
         self.cache_manager: CacheManager = cache_manager or GLOBAL_CACHE
         from core.memory_guard import MemoryGuard
         self.finished.connect(lambda: MemoryGuard.clean())
         self.cancelled.connect(self.task_canceled.emit)
+
+    def record_heartbeat(self, stage: Optional[str] = None) -> None:
+        """Refresh heartbeat timestamp whenever a network chunk, search hit, or progress tick is recorded."""
+        self._last_heartbeat = time.monotonic()
+        if stage:
+            self._current_stage = stage
+
+    def start_watchdog(self, initial_stage: str = "OmniSweep Discovery") -> None:
+        """Spawn a background daemon thread checking for stalls."""
+        self._watchdog_active = True
+        self._last_heartbeat = time.monotonic()
+        self._task_start = time.monotonic()
+        self._current_stage = initial_stage
+
+        def _watchdog_loop() -> None:
+            while self._watchdog_active and not self.is_cancelled():
+                time.sleep(min(0.2, max(0.02, self._watchdog_timeout / 4.0)))
+                now = time.monotonic()
+                idle_sec = now - self._last_heartbeat
+                total_sec = now - self._task_start
+                if idle_sec >= self._watchdog_timeout or total_sec >= self._total_stall_limit:
+                    self.stop_requested.set()
+                    self._is_cancelled = True
+                    try:
+                        self.task_timed_out.emit(self._current_stage, idle_sec)
+                        self.cancelled.emit()
+                    except Exception:
+                        pass
+                    break
+
+        wd = threading.Thread(target=_watchdog_loop, daemon=True)
+        wd.start()
+
+    def stop_watchdog(self) -> None:
+        self._watchdog_active = False
 
     def requestInterruption(self) -> None:
         """Set cooperative cancellation flag in addition to QThread interruption state."""
@@ -109,176 +157,193 @@ class OmniSweepWorker(BaseCancellableWorker):
         self.scrape_status_text = scrape_status_text
 
     def run(self) -> None:
-        if self.is_cancelled():
-            self.cancelled.emit()
-            return
-
-        model_name = self.model_override or self.config_manager.config.discovery_model
-        persona_ids = [
-            str(p.get("id") or p.get("name") or "") for p in self.perspectives
-        ]
-
-        # 1. Global Cache Check
-        cached_dict = self.cache_manager.get_discovery(self.topic, persona_ids, model_name)
-        if cached_dict is not None:
-            if self.is_cancelled():
-                self.cancelled.emit()
-                return
-            restored = OmniSweepDiscoveryResult.from_dict(cached_dict)
-            self.progress_Detailed.emit(100, 0, "CACHE_HIT")
-            self.cache_Hit.emit()
-            self.finished_Success.emit(restored)
-            return
-
-        total = max(1, len(self.perspectives))
-        state_lock = threading.Lock()
-        state = {
-            "active_index": 1,
-            "subphase_start_pct": 0.0,
-            "subphase_target_pct": (0.15 / total) * 100.0,
-            "current_pct": 1.0,
-            "avg_duration": 9.0,
-            "completed_count": 0,
-            "step_start_time": time.monotonic(),
-            "status_text": f"[1/{total}] Initializing OmniSweep discovery...",
-            "stop_ticker": False,
-        }
-
-        def _ticker_loop() -> None:
-            while True:
-                time.sleep(0.25)
-                if self.is_cancelled():
-                    break
-                with state_lock:
-                    if state["stop_ticker"]:
-                        break
-                    cur = float(state["current_pct"])
-                    target = float(state["subphase_target_pct"])
-                    if cur < target - 0.4:
-                        cur = min(target - 0.4, cur + max(0.35, (target - cur) * 0.12))
-                        state["current_pct"] = cur
-
-                    idx = int(state["active_index"])
-                    avg_dur = float(state["avg_duration"])
-                    step_elapsed = max(0.0, time.monotonic() - float(state["step_start_time"]))
-                    rem_in_current = max(1.0, avg_dur - step_elapsed)
-                    rem_perspectives = max(0, total - idx)
-                    pacing_rem = rem_perspectives * self.inter_perspective_delay
-                    eta_sec = max(1, int(round(rem_in_current + rem_perspectives * avg_dur + pacing_rem)))
-                    pct_int = max(1, min(99, int(round(cur))))
-                    st_msg = str(state["status_text"])
-
-                self.progress_Detailed.emit(pct_int, eta_sec, st_msg)
-
-        ticker_thread = threading.Thread(target=_ticker_loop, daemon=True)
-        ticker_thread.start()
-
-        task_id = f"omnisweep_{id(self)}"
+        self.start_watchdog("omnisweep_phase_1")
         try:
             if self.is_cancelled():
                 self.cancelled.emit()
                 return
 
-            client = self.config_manager.create_client()
-            est_prompt = max(400, len(self.topic) * 4 + len(self.corpus_summary) // 4 + 600) * total
-            GLOBAL_COST_TRACKER.start_task(
-                task_id=task_id,
-                model=model_name,
-                prompt_text_or_tokens=est_prompt,
-                session_id="discovery",
-            )
-            self.telemetry_live.emit(GLOBAL_COST_TRACKER.get_live_totals().to_dict())
+            model_name = self.model_override or self.config_manager.config.discovery_model
+            persona_ids = [
+                str(p.get("id") or p.get("name") or "") for p in self.perspectives
+            ]
 
-            agent = OmniSweepDiscoveryAgent(
-                client=client,
-                model_name=model_name,
-                inter_perspective_delay=self.inter_perspective_delay,
-                deep_scrape=self.deep_scrape,
-                scrape_status_text=self.scrape_status_text,
-            )
+            # 1. Global Cache Check
+            cached_dict = self.cache_manager.get_discovery(self.topic, persona_ids, model_name)
+            if cached_dict is not None:
+                if self.is_cancelled():
+                    self.cancelled.emit()
+                    return
+                restored = OmniSweepDiscoveryResult.from_dict(cached_dict)
+                self.progress_Detailed.emit(100, 0, "CACHE_HIT")
+                self.cache_Hit.emit()
+                self.finished_Success.emit(restored)
+                return
 
-            completed_durations: List[float] = []
+            total = max(1, len(self.perspectives))
+            state_lock = threading.Lock()
+            state = {
+                "active_index": 1,
+                "subphase_start_pct": 0.0,
+                "subphase_target_pct": (0.15 / total) * 100.0,
+                "current_pct": 1.0,
+                "avg_duration": 9.0,
+                "completed_count": 0,
+                "step_start_time": time.monotonic(),
+                "status_text": "omnisweep_phase_1",
+                "stop_ticker": False,
+            }
 
-            def on_subphase(idx: int, tot: int, status_msg: str, cumulative_slice_ratio: float) -> None:
-                slice_width = 100.0 / max(1, tot)
-                slice_base = (idx - 1) * slice_width
-                with state_lock:
-                    if idx != state["active_index"]:
-                        state["active_index"] = idx
-                        state["step_start_time"] = time.monotonic()
-                    if cumulative_slice_ratio <= 0.16:
-                        # Subphase 1 (0 -> 15% of slice)
-                        state["subphase_start_pct"] = slice_base
-                        state["subphase_target_pct"] = slice_base + slice_width * 0.15
-                        state["current_pct"] = max(float(state["current_pct"]), slice_base + slice_width * 0.05)
-                    elif cumulative_slice_ratio <= 0.76:
-                        # Subphase 2 (15% -> 75% of slice: Search grounding 60%)
-                        state["subphase_start_pct"] = slice_base + slice_width * 0.15
-                        state["subphase_target_pct"] = slice_base + slice_width * 0.75
-                        state["current_pct"] = max(float(state["current_pct"]), slice_base + slice_width * 0.18)
-                    else:
-                        # Subphase 3 (75% -> 100% of slice: Perspective synthesis 25%)
-                        state["subphase_start_pct"] = slice_base + slice_width * 0.75
-                        state["subphase_target_pct"] = slice_base + slice_width * 0.98
-                        state["current_pct"] = max(float(state["current_pct"]), slice_base + slice_width * 0.78)
-                    state["status_text"] = status_msg
+            def _ticker_loop() -> None:
+                while True:
+                    time.sleep(0.25)
+                    if self.is_cancelled():
+                        break
+                    with state_lock:
+                        if state["stop_ticker"]:
+                            break
+                        cur = float(state["current_pct"])
+                        target = float(state["subphase_target_pct"])
+                        if cur < target - 0.4:
+                            cur = min(target - 0.4, cur + max(0.35, (target - cur) * 0.12))
+                            state["current_pct"] = cur
 
-            def on_step_progress(pct: int, _eta: int, status_msg: str, idx: int) -> None:
-                with state_lock:
-                    elapsed_step = max(0.5, time.monotonic() - float(state["step_start_time"]))
-                    if pct >= int((idx / total) * 100):
-                        completed_durations.append(elapsed_step)
-                        state["avg_duration"] = sum(completed_durations) / len(completed_durations)
-                        state["current_pct"] = float(pct)
-                    state["status_text"] = status_msg
-                GLOBAL_COST_TRACKER.accumulate_chunk(task_id, 350)
+                        idx = int(state["active_index"])
+                        avg_dur = float(state["avg_duration"])
+                        step_elapsed = max(0.0, time.monotonic() - float(state["step_start_time"]))
+                        rem_in_current = max(1.0, avg_dur - step_elapsed)
+                        rem_perspectives = max(0, total - idx)
+                        pacing_rem = rem_perspectives * self.inter_perspective_delay
+                        eta_sec = max(1, int(round(rem_in_current + rem_perspectives * avg_dur + pacing_rem)))
+                        pct_int = max(1, min(99, int(round(cur))))
+                        st_msg = str(state["status_text"])
+
+                    self.record_heartbeat()
+                    self.progress_Detailed.emit(pct_int, eta_sec, st_msg)
+
+            ticker_thread = threading.Thread(target=_ticker_loop, daemon=True)
+            ticker_thread.start()
+
+            task_id = f"omnisweep_{id(self)}"
+            try:
+                if self.is_cancelled():
+                    self.cancelled.emit()
+                    return
+
+                client = self.config_manager.create_client()
+                est_prompt = max(400, len(self.topic) * 4 + len(self.corpus_summary) // 4 + 600) * total
+                GLOBAL_COST_TRACKER.start_task(
+                    task_id=task_id,
+                    model=model_name,
+                    prompt_text_or_tokens=est_prompt,
+                    session_id="discovery",
+                )
                 self.telemetry_live.emit(GLOBAL_COST_TRACKER.get_live_totals().to_dict())
 
-            result: OmniSweepDiscoveryResult = agent.run_discovery(
-                topic=self.topic,
-                perspectives=self.perspectives,
-                corpus_summary=self.corpus_summary,
-                progress_callback=self.progress_Changed.emit,
-                step_progress_callback=on_step_progress,
-                subphase_callback=on_subphase,
-                cancel_check=self.is_cancelled,
-            )
+                agent = OmniSweepDiscoveryAgent(
+                    client=client,
+                    model_name=model_name,
+                    inter_perspective_delay=self.inter_perspective_delay,
+                    deep_scrape=self.deep_scrape,
+                    scrape_status_text=self.scrape_status_text,
+                )
 
-            with state_lock:
-                state["stop_ticker"] = True
+                completed_durations: List[float] = []
 
-            GLOBAL_COST_TRACKER.reconcile_task(task_id, record_to_ledger=True, prompt_tokens=est_prompt, candidate_tokens=350 * total)
-            self.telemetry_live.emit(GLOBAL_COST_TRACKER.get_live_totals().to_dict())
+                def on_subphase(idx: int, tot: int, status_msg: str, cumulative_slice_ratio: float) -> None:
+                    slice_width = 100.0 / max(1, tot)
+                    slice_base = (idx - 1) * slice_width
+                    if cumulative_slice_ratio <= 0.16:
+                        phase_token = "omnisweep_phase_1"
+                    elif cumulative_slice_ratio <= 0.76:
+                        phase_token = "omnisweep_phase_2"
+                    else:
+                        phase_token = "omnisweep_phase_3"
+                    self.record_heartbeat(phase_token)
 
-            if self.is_cancelled():
+                    with state_lock:
+                        if idx != state["active_index"]:
+                            state["active_index"] = idx
+                            state["step_start_time"] = time.monotonic()
+                        if cumulative_slice_ratio <= 0.16:
+                            # Subphase 1 (0 -> 15% of slice)
+                            state["subphase_start_pct"] = slice_base
+                            state["subphase_target_pct"] = slice_base + slice_width * 0.15
+                            state["current_pct"] = max(float(state["current_pct"]), slice_base + slice_width * 0.05)
+                        elif cumulative_slice_ratio <= 0.76:
+                            # Subphase 2 (15% -> 75% of slice: Search grounding 60%)
+                            state["subphase_start_pct"] = slice_base + slice_width * 0.15
+                            state["subphase_target_pct"] = slice_base + slice_width * 0.75
+                            state["current_pct"] = max(float(state["current_pct"]), slice_base + slice_width * 0.18)
+                        else:
+                            # Subphase 3 (75% -> 100% of slice: Perspective synthesis 25%)
+                            state["subphase_start_pct"] = slice_base + slice_width * 0.75
+                            state["subphase_target_pct"] = slice_base + slice_width * 0.98
+                            state["current_pct"] = max(float(state["current_pct"]), slice_base + slice_width * 0.78)
+                        state["status_text"] = phase_token
+
+                def on_step_progress(pct: int, _eta: int, status_msg: str, idx: int) -> None:
+                    self.record_heartbeat("omnisweep_phase_3")
+                    with state_lock:
+                        elapsed_step = max(0.5, time.monotonic() - float(state["step_start_time"]))
+                        if pct >= int((idx / total) * 100):
+                            completed_durations.append(elapsed_step)
+                            state["avg_duration"] = sum(completed_durations) / len(completed_durations)
+                            state["current_pct"] = float(pct)
+                        state["status_text"] = "omnisweep_phase_3"
+                    GLOBAL_COST_TRACKER.accumulate_chunk(task_id, 350)
+                    self.telemetry_live.emit(GLOBAL_COST_TRACKER.get_live_totals().to_dict())
+
+                result: OmniSweepDiscoveryResult = agent.run_discovery(
+                    topic=self.topic,
+                    perspectives=self.perspectives,
+                    corpus_summary=self.corpus_summary,
+                    progress_callback=self.progress_Changed.emit,
+                    step_progress_callback=on_step_progress,
+                    subphase_callback=on_subphase,
+                    cancel_check=self.is_cancelled,
+                )
+
+                with state_lock:
+                    state["stop_ticker"] = True
+
+                GLOBAL_COST_TRACKER.reconcile_task(task_id, record_to_ledger=True, prompt_tokens=est_prompt, candidate_tokens=350 * total)
+                self.telemetry_live.emit(GLOBAL_COST_TRACKER.get_live_totals().to_dict())
+
+                if self.is_cancelled():
+                    self.cancelled.emit()
+                    return
+
+                self.record_heartbeat("omnisweep_phase_4")
+                self.cache_manager.set_discovery(
+                    self.topic, persona_ids, model_name, result.to_dict()
+                )
+                self.progress_Detailed.emit(100, 0, "omnisweep_phase_4")
+                self.finished_Success.emit(result)
+            except TaskCancelledError:
+                with state_lock:
+                    state["stop_ticker"] = True
+                GLOBAL_COST_TRACKER.cancel_task(task_id, commit_partial=True)
+                self.telemetry_live.emit(GLOBAL_COST_TRACKER.get_live_totals().to_dict())
                 self.cancelled.emit()
-                return
-
-            self.cache_manager.set_discovery(
-                self.topic, persona_ids, model_name, result.to_dict()
-            )
-            self.progress_Detailed.emit(100, 0, "OmniSweep Discovery complete.")
-            self.finished_Success.emit(result)
-        except TaskCancelledError:
-            with state_lock:
-                state["stop_ticker"] = True
-            GLOBAL_COST_TRACKER.cancel_task(task_id, commit_partial=True)
-            self.telemetry_live.emit(GLOBAL_COST_TRACKER.get_live_totals().to_dict())
-            self.cancelled.emit()
-        except Exception as exc:
-            with state_lock:
-                state["stop_ticker"] = True
-            GLOBAL_COST_TRACKER.cancel_task(task_id, commit_partial=True)
-            self.telemetry_live.emit(GLOBAL_COST_TRACKER.get_live_totals().to_dict())
-            if self.is_cancelled():
-                self.cancelled.emit()
-                return
-            if is_rate_limit_error(exc):
-                self.failed_Error.emit(RATE_LIMIT_USER_MESSAGE)
-            else:
-                detail = f"{exc}\n\n{traceback.format_exc()}"
-                self.failed_Error.emit(detail)
-
+            except Exception as exc:
+                with state_lock:
+                    state["stop_ticker"] = True
+                GLOBAL_COST_TRACKER.cancel_task(task_id, commit_partial=True)
+                self.telemetry_live.emit(GLOBAL_COST_TRACKER.get_live_totals().to_dict())
+                if self.is_cancelled():
+                    self.cancelled.emit()
+                    return
+                if is_rate_limit_error(exc):
+                    self.failed_Error.emit(RATE_LIMIT_USER_MESSAGE)
+                else:
+                    detail = f"{exc}\n\n{traceback.format_exc()}"
+                    self.failed_Error.emit(detail)
+        except Exception as top_exc:
+            if not self.is_cancelled():
+                self.failed_Error.emit(str(top_exc))
+        finally:
+            self.stop_watchdog()
 
 # Backwards-compatible alias
 ResearchWorker = OmniSweepWorker

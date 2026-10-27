@@ -1,9 +1,9 @@
-"""Status bar component with font-metric dynamic ETA prefix and jitter-free fixed ETA value labels."""
+"""Status bar component with font-metric dynamic ETA prefix, jitter-free value labels, and busy spinner."""
 
 from __future__ import annotations
 
 from typing import Optional
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtWidgets import (
     QWidget,
     QHBoxLayout,
@@ -14,6 +14,8 @@ from PyQt6.QtWidgets import (
 )
 
 from core.i18n import get_text
+
+SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 
 class StatusEtaWidget(QWidget):
@@ -88,13 +90,14 @@ class StatusEtaWidget(QWidget):
 
 
 class OmniStatusBar(QWidget):
-    """Bottom status bar strip containing status text, ETA widget, progress bar, and cancel button."""
+    """Bottom status bar strip containing status text, animated spinner, ETA widget, progress bar, and cancel button."""
 
     cancel_requested = pyqtSignal()
 
     def __init__(self, lang: str = "en", parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._lang = lang
+        self._spinner_idx = 0
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -103,10 +106,22 @@ class OmniStatusBar(QWidget):
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 0, 12, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
+
+        # Rotating spinner indicator
+        self.spinner_label = QLabel("")
+        self.spinner_label.setObjectName("StatusSpinnerLabel")
+        self.spinner_label.setStyleSheet("color: #38BDF8; font-size: 13px; font-weight: bold; border: none; background: transparent;")
+        self.spinner_label.setFixedWidth(16)
+        self.spinner_label.setVisible(False)
+        layout.addWidget(self.spinner_label)
+
+        self.spinner_timer = QTimer(self)
+        self.spinner_timer.setInterval(100)
+        self.spinner_timer.timeout.connect(self._on_spinner_tick)
 
         # Status text
-        self.status_label = QLabel(get_text("welcome_step1", self._lang))
+        self.status_label = QLabel(get_text("status_ready", self._lang) or "Ready")
         self.status_label.setStyleSheet("color: #C9D1D9; font-size: 12px; border: none; background: transparent;")
         layout.addWidget(self.status_label, stretch=1)
 
@@ -138,12 +153,46 @@ class OmniStatusBar(QWidget):
 
         layout.addLayout(controls_layout)
 
+    def _on_spinner_tick(self) -> None:
+        self._spinner_idx = (self._spinner_idx + 1) % len(SPINNER_FRAMES)
+        self.spinner_label.setText(SPINNER_FRAMES[self._spinner_idx])
+
+    def start_busy(self, initial_text: str = "") -> None:
+        """Start animated busy spinner and indeterminate progress animation."""
+        self.spinner_label.setText(SPINNER_FRAMES[0])
+        self.spinner_label.setVisible(True)
+        self.spinner_timer.start()
+        self.progress_bar.setRange(0, 0)  # Continuous pulse animation
+        if initial_text:
+            self.set_status(initial_text)
+        self.show_cancel(True)
+
     def set_status(self, text: str) -> None:
+        # Check if text is a known locale token
+        token = text.strip()
+        if token in ("omnisweep_phase_1", "omnisweep_phase_2", "omnisweep_phase_3", "omnisweep_phase_4", "status_ready"):
+            text = get_text(token, self._lang)
         self.status_label.setText(text)
 
     def set_progress(self, percentage: int, eta_seconds: int = 0, is_ready: bool = False) -> None:
-        self.progress_bar.setValue(max(0, min(100, percentage)))
+        if percentage > 0:
+            if self.progress_bar.maximum() == 0:
+                self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(max(0, min(100, percentage)))
+        else:
+            self.progress_bar.setRange(0, 0)
         self.eta_widget.set_eta(eta_seconds, is_ready=is_ready)
+
+    def reset_state(self) -> None:
+        """Clean state reset on task completion, cancellation, or watchdog timeout."""
+        self.spinner_timer.stop()
+        self.spinner_label.setText("")
+        self.spinner_label.setVisible(False)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.status_label.setText(get_text("status_ready", self._lang) or "Ready")
+        self.eta_widget.clear()
+        self.show_cancel(False)
 
     def show_cancel(self, show: bool = True) -> None:
         self.btn_cancel.setVisible(show)
@@ -153,3 +202,5 @@ class OmniStatusBar(QWidget):
         self._lang = lang
         self.eta_widget.set_language(lang)
         self.btn_cancel.setText(get_text("btn_cancel", lang))
+        if self.progress_bar.value() == 0 and not self.spinner_timer.isActive():
+            self.status_label.setText(get_text("status_ready", self._lang) or "Ready")
