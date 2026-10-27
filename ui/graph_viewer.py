@@ -237,6 +237,40 @@ class _CausalEdgeGraphicsItem(QGraphicsItem):
             painter.drawText(badge_rect, int(Qt.AlignmentFlag.AlignCenter), self.relation)
 
 
+class CausalGraphView(QGraphicsView):
+    """OpenGL-accelerated QGraphicsView with cursor-centered wheel zoom and scrollbar elimination."""
+
+    def __init__(self, scene: QGraphicsScene, parent: Optional[QWidget] = None) -> None:
+        super().__init__(scene, parent)
+        if QOpenGLWidget is not None:
+            try:
+                self.setViewport(QOpenGLWidget())
+            except Exception:
+                pass
+        self.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontSavePainterState, True)
+        self.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontAdjustForAntialiasing, True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setRenderHints(
+            QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.TextAntialiasing
+            | QPainter.RenderHint.SmoothPixmapTransform
+        )
+        self.setStyleSheet("QGraphicsView { border: 1px solid #1E293B; border-radius: 6px; background-color: #070A10; }")
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        if event.modifiers() == Qt.KeyboardModifier.NoModifier:
+            zoom_in = event.angleDelta().y() > 0
+            factor = 1.15 if zoom_in else (1.0 / 1.15)
+            self.scale(factor, factor)
+            event.accept()
+        else:
+            super().wheelEvent(event)
+
+
 class CausalGraphWidget(QWidget):
     """Visualizes causal failure trees and argument flowcharts with discrete interactive QGraphicsView nodes and directed edges."""
 
@@ -306,35 +340,17 @@ class CausalGraphWidget(QWidget):
         self.scene = QGraphicsScene(self)
         self.scene.setBackgroundBrush(QBrush(QColor("#070A10")))
 
-        self.view = QGraphicsView(self.scene, self)
-        if QOpenGLWidget is not None:
-            try:
-                self.view.setViewport(QOpenGLWidget())
-            except Exception:
-                pass
-        self.view.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontSavePainterState, True)
-        self.view.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontAdjustForAntialiasing, True)
-        self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.view.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
-        self.view.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
-        self.view.setRenderHints(
-            QPainter.RenderHint.Antialiasing
-            | QPainter.RenderHint.TextAntialiasing
-            | QPainter.RenderHint.SmoothPixmapTransform
-        )
-        self.view.setStyleSheet("QGraphicsView { border: 1px solid #1E293B; border-radius: 6px; background-color: #070A10; }")
-        self.view.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.view = CausalGraphView(self.scene, self)
         layout.addWidget(self.view, stretch=1)
 
         self._show_empty_state()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        delta = event.angleDelta().y()
-        if delta > 0:
-            self.view.scale(1.15, 1.15)
-        elif delta < 0:
-            self.view.scale(1.0 / 1.15, 1.0 / 1.15)
+        if event.modifiers() == Qt.KeyboardModifier.NoModifier:
+            zoom_in = event.angleDelta().y() > 0
+            factor = 1.15 if zoom_in else (1.0 / 1.15)
+            self.view.scale(factor, factor)
+            event.accept()
         else:
             super().wheelEvent(event)
 
@@ -367,8 +383,10 @@ class CausalGraphWidget(QWidget):
                 )
                 self.scene.addItem(edge_item)
 
-        self.scene.setSceneRect(self.scene.itemsBoundingRect().adjusted(-80, -80, 80, 80))
-        self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        rect = self.scene.itemsBoundingRect().adjusted(-50, -50, 50, 50)
+        if not rect.isEmpty():
+            self.scene.setSceneRect(rect)
+            self.view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
 
     def _show_empty_state(self) -> None:
         self.scene.clear()
@@ -486,8 +504,10 @@ class CausalGraphWidget(QWidget):
                 self.scene.addItem(edge_item)
 
         # Update scene bounds and fit into view
-        self.scene.setSceneRect(self.scene.itemsBoundingRect().adjusted(-80, -80, 80, 80))
-        self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        rect = self.scene.itemsBoundingRect().adjusted(-50, -50, 50, 50)
+        if not rect.isEmpty():
+            self.scene.setSceneRect(rect)
+            self.view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
 
     def _on_zoom_in(self) -> None:
         self.view.scale(1.2, 1.2)
@@ -497,8 +517,9 @@ class CausalGraphWidget(QWidget):
 
     def _on_zoom_reset(self) -> None:
         self.view.resetTransform()
-        rect = self.scene.itemsBoundingRect().adjusted(-60, -60, 60, 60)
+        rect = self.scene.itemsBoundingRect().adjusted(-50, -50, 50, 50)
         if not rect.isEmpty():
+            self.scene.setSceneRect(rect)
             self.view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
 
     def _on_anchor_clicked(self, url: QUrl) -> None:

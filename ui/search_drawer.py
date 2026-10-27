@@ -219,3 +219,13 @@ class SearchDockWidget(QDockWidget):
 
     def focus_search(self) -> None:
         self.drawer.focus_search()
+
+    @property
+    def search_input(self) -> QLineEdit:
+        return self.drawer.search_input
+
+    def perform_search(self) -> None:
+        self.drawer.perform_search()
+
+    def _run_search(self) -> None:
+        self.drawer.perform_search()

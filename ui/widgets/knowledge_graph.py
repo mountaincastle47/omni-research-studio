@@ -59,6 +59,7 @@ class _KGNodeItem(QGraphicsEllipseItem):
         super().__init__(-radius, -radius, radius * 2, radius * 2)
         self.node_id = node_id
         self.name = name
+        self.entity_name = name
         self.category = category
         self.color_hex = color_hex
         self.citations = citations
@@ -84,13 +85,26 @@ class _KGNodeItem(QGraphicsEllipseItem):
         font = QFont("Segoe UI", 9, QFont.Weight.Bold)
         self.label_item.setFont(font)
         self.label_item.setBrush(QBrush(QColor("#F1F5F9")))
+        self.label_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         bounds = self.label_item.boundingRect()
         self.label_item.setPos(-bounds.width() / 2.0, radius + 4)
 
     def mousePressEvent(self, event: Any) -> None:
         if self.parent_widget:
             self.parent_widget._on_node_clicked(self.node_id)
-        super().mousePressEvent(event)
+        try:
+            super().mousePressEvent(event)
+        except Exception:
+            pass
+
+    def mouseDoubleClickEvent(self, event: Any) -> None:
+        if hasattr(event, "accept"):
+            event.accept()
+        self.setSelected(True)
+        if self.parent_widget:
+            self.parent_widget._on_node_double_clicked(self.entity_name)
+        elif hasattr(self.scene(), "node_double_clicked"):
+            self.scene().node_double_clicked.emit(self.entity_name)
 
 
 class _KGEdgeItem(QGraphicsLineItem):
@@ -151,13 +165,25 @@ class KnowledgeGraphView(QGraphicsView):
         self.setStyleSheet("QGraphicsView { border: 1px solid #1E293B; border-radius: 6px; background-color: #070A10; }")
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        delta = event.angleDelta().y()
-        if delta > 0:
-            self.scale(1.15, 1.15)
-        elif delta < 0:
-            self.scale(1.0 / 1.15, 1.0 / 1.15)
+        if event.modifiers() == Qt.KeyboardModifier.NoModifier:
+            zoom_in = event.angleDelta().y() > 0
+            factor = 1.15 if zoom_in else (1.0 / 1.15)
+            self.scale(factor, factor)
+            event.accept()
         else:
             super().wheelEvent(event)
+
+    def mouseDoubleClickEvent(self, event: Any) -> None:
+        item = self.itemAt(event.pos())
+        if isinstance(item, _KGNodeItem):
+            item.mouseDoubleClickEvent(event)
+            event.accept()
+            return
+        elif item and item.parentItem() and isinstance(item.parentItem(), _KGNodeItem):
+            item.parentItem().mouseDoubleClickEvent(event)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
 
 class KnowledgeGraphWidget(QWidget):
@@ -205,6 +231,26 @@ class KnowledgeGraphWidget(QWidget):
         )
         self.btn_relayout.clicked.connect(self.auto_layout)
         top_strip.addWidget(self.btn_relayout)
+
+        self.btn_zoom_in = QPushButton("➕", self)
+        self.btn_zoom_in.setToolTip(get_text("zoom_in_graph", self._lang))
+        self.btn_zoom_in.setStyleSheet(
+            "QPushButton { background-color: #1E293B; color: #F1F5F9; border: 1px solid #334155; "
+            "border-radius: 6px; padding: 6px 10px; font-size: 11px; } "
+            "QPushButton:hover { background-color: #334155; }"
+        )
+        self.btn_zoom_in.clicked.connect(lambda: self.view.scale(1.2, 1.2))
+        top_strip.addWidget(self.btn_zoom_in)
+
+        self.btn_zoom_out = QPushButton("➖", self)
+        self.btn_zoom_out.setToolTip(get_text("zoom_out_graph", self._lang))
+        self.btn_zoom_out.setStyleSheet(
+            "QPushButton { background-color: #1E293B; color: #F1F5F9; border: 1px solid #334155; "
+            "border-radius: 6px; padding: 6px 10px; font-size: 11px; } "
+            "QPushButton:hover { background-color: #334155; }"
+        )
+        self.btn_zoom_out.clicked.connect(lambda: self.view.scale(1.0 / 1.2, 1.0 / 1.2))
+        top_strip.addWidget(self.btn_zoom_out)
 
         layout.addLayout(top_strip)
 
@@ -292,6 +338,7 @@ class KnowledgeGraphWidget(QWidget):
 
     def auto_layout_fit(self) -> None:
         """Fit scene to viewport with 50px margins."""
+        self.view.resetTransform()
         rect = self.scene.itemsBoundingRect().adjusted(-50, -50, 50, 50)
         if not rect.isEmpty():
             self.scene.setSceneRect(rect)
@@ -339,14 +386,8 @@ class KnowledgeGraphWidget(QWidget):
         placeholder.setPos(-bounds.width() / 2.0, -bounds.height() / 2.0)
         self.scene.setSceneRect(placeholder.boundingRect().adjusted(-80, -80, 80, 80))
 
-    def _on_node_clicked(self, node_id: str) -> None:
-        """Highlight connected edges and neighbor nodes; dim unrelated items."""
-        if self._selected_node == node_id:
-            # Toggle off
-            self._selected_node = None
-            self._reset_selection()
-            return
-
+    def _select_node(self, node_id: str) -> None:
+        """Select node and highlight its connected edges and neighbors."""
         self._selected_node = node_id
         connected_neighbors: Set[str] = {node_id}
 
@@ -368,6 +409,24 @@ class KnowledgeGraphWidget(QWidget):
             else:
                 item.setOpacity(0.2)
                 item.setScale(1.0)
+
+    def _on_node_clicked(self, node_id: str) -> None:
+        """Highlight connected edges and neighbor nodes; dim unrelated items."""
+        if self._selected_node == node_id:
+            # Toggle off
+            self._selected_node = None
+            self._reset_selection()
+            return
+        self._select_node(node_id)
+
+    def _on_node_double_clicked(self, entity_name: str) -> None:
+        """Keep node selected and emit entity_selected for FTS5 corpus search."""
+        for nid, item in self._node_items.items():
+            if item.name == entity_name or nid == entity_name:
+                self._select_node(nid)
+                item.setSelected(True)
+                break
+        self.entity_selected.emit(entity_name)
 
     def _reset_selection(self) -> None:
         for edge in self._edge_items:
@@ -395,9 +454,9 @@ class KnowledgeGraphWidget(QWidget):
         """Detect double-click on node item to emit search signal."""
         item = self.view.itemAt(self.view.mapFromParent(event.pos()))
         if isinstance(item, _KGNodeItem):
-            self.entity_selected.emit(item.name)
+            self._on_node_double_clicked(item.name)
         elif item and item.parentItem() and isinstance(item.parentItem(), _KGNodeItem):
-            self.entity_selected.emit(item.parentItem().name)
+            self._on_node_double_clicked(item.parentItem().name)
         super().mouseDoubleClickEvent(event)
 
     def retranslate_ui(self, lang: str = "en") -> None:

@@ -2072,8 +2072,18 @@ class MainWindow(QMainWindow):
         if hasattr(self, "search_dock"):
             self.search_dock.show()
             self.search_dock.raise_()
-            self.search_dock.search_input.setText(entity_name)
-            self.search_dock._run_search()
+            if hasattr(self.search_dock, "drawer"):
+                self.search_dock.drawer.search_input.setText(entity_name)
+                self.search_dock.drawer.perform_search()
+                self.search_dock.drawer.focus_search()
+            elif hasattr(self.search_dock, "search_input"):
+                self.search_dock.search_input.setText(entity_name)
+                if hasattr(self.search_dock, "perform_search"):
+                    self.search_dock.perform_search()
+                elif hasattr(self.search_dock, "_run_search"):
+                    self.search_dock._run_search()
+            if hasattr(self.search_dock, "focus_search"):
+                self.search_dock.focus_search()
         self._set_status(f"FTS5 Search for entity: {entity_name}")
 
     def _get_mobile_workspaces(self) -> list:
