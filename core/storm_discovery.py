@@ -13,7 +13,6 @@ from google import genai
 import httpx
 from google.genai import types
 
-GEMINI_HTTPX_TIMEOUT = httpx.Timeout(connect=10.0, read=180.0, write=15.0, pool=10.0)
 
 from core.config import DEFAULT_DISCOVERY_MODEL
 from core.resilience import (
@@ -760,10 +759,7 @@ class OmniSweepDiscoveryAgent:
         config = types.GenerateContentConfig(
             system_instruction=QUERY_FORMULATION_DIRECTIVE,
             temperature=0.2,
-            http_options=types.HttpOptions(
-                timeout=180.0,
-                httpx_client=httpx.Client(timeout=GEMINI_HTTPX_TIMEOUT),
-            ),
+            http_options=types.HttpOptions(timeout=180.0),
         )
 
         response = _generate_content_with_retry(
@@ -847,10 +843,7 @@ class OmniSweepDiscoveryAgent:
             system_instruction=system_instruction,
             temperature=0.3,
             tools=[types.Tool(google_search=types.GoogleSearch())],
-            http_options=types.HttpOptions(
-                timeout=180.0,
-                httpx_client=httpx.Client(timeout=GEMINI_HTTPX_TIMEOUT),
-            ),
+            http_options=types.HttpOptions(timeout=180.0),
         )
 
         response = _generate_content_with_retry(
