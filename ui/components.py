@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLayout,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
@@ -76,6 +77,7 @@ class ApiKeyBanner(QFrame):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 4, 10, 4)
         layout.setSpacing(8)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
 
         self.badge_label = QLabel()
         self.badge_label.setStyleSheet("font-size: 12px; font-weight: 600; border: none; background: transparent;")
@@ -93,7 +95,8 @@ class ApiKeyBanner(QFrame):
         self.key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.key_input.setPlaceholderText("GEMINI_API_KEY...")
         self.key_input.setText(self._current_key)
-        self.key_input.setMinimumWidth(220)
+        self.key_input.setMaximumWidth(320)
+        self.key_input.setCursorPosition(0)
         self.key_input.setFixedHeight(26)
         self.key_input.returnPressed.connect(self._on_save_clicked)
 
@@ -133,6 +136,7 @@ class ApiKeyBanner(QFrame):
     def _on_start_editing(self) -> None:
         self._editing = True
         self._sync_mode()
+        self.key_input.setCursorPosition(0)
         self.key_input.setFocus()
         self.key_input.selectAll()
 

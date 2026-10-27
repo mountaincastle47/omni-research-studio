@@ -738,13 +738,36 @@ class MainWindow(QMainWindow):
         status_controls_layout.setSpacing(8)
         status_controls_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-        self.eta_label = QLabel("")
-        self.eta_label.setObjectName("StatusEtaLabel")
-        self.eta_label.setFixedWidth(85)
-        self.eta_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.eta_label.setStyleSheet(
+        # Split ETA timer into two distinct labels inside an HBoxLayout:
+        # eta_prefix_label (dynamic width based on font metrics) + eta_value_label (fixed 55px width, right-aligned)
+        self.eta_container = QWidget()
+        self.eta_container.setObjectName("StatusEtaContainer")
+        self.eta_container.setStyleSheet("background: transparent; border: none;")
+        eta_layout = QHBoxLayout(self.eta_container)
+        eta_layout.setContentsMargins(0, 0, 0, 0)
+        eta_layout.setSpacing(4)
+        eta_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        self.eta_prefix_label = QLabel("")
+        self.eta_prefix_label.setObjectName("StatusEtaPrefixLabel")
+        self.eta_prefix_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.eta_prefix_label.setStyleSheet(
+            "color: #8B949E; font-size: 12px; font-weight: 500; border: none; background: transparent;"
+        )
+
+        self.eta_value_label = QLabel("")
+        self.eta_value_label.setObjectName("StatusEtaValueLabel")
+        self.eta_value_label.setFixedWidth(55)
+        self.eta_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.eta_value_label.setStyleSheet(
             "color: #58A6FF; font-size: 12px; font-weight: 600; border: none; background: transparent;"
         )
+
+        eta_layout.addWidget(self.eta_prefix_label)
+        eta_layout.addWidget(self.eta_value_label)
+
+        # Backwards compatibility alias
+        self.eta_label = self.eta_value_label
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setObjectName("StatusProgressBar")
@@ -760,7 +783,7 @@ class MainWindow(QMainWindow):
         self.btn_cancel.setVisible(False)
         self.btn_cancel.clicked.connect(self._on_cancel_active_task)
 
-        status_controls_layout.addWidget(self.eta_label)
+        status_controls_layout.addWidget(self.eta_container)
         status_controls_layout.addWidget(self.progress_bar)
         status_controls_layout.addWidget(self.btn_cancel)
 
@@ -823,9 +846,11 @@ class MainWindow(QMainWindow):
         self.upload_btn.clicked.connect(self._on_upload_files)
 
         self.btn_diff_compare = QPushButton(get_text("menu_diff_compare", self.current_language))
+        self.btn_diff_compare.setObjectName("DiffCompareBtn")
+        self.btn_diff_compare.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         self.btn_diff_compare.setStyleSheet(
             "QPushButton { background-color: #1E293B; color: #38BDF8; border: 1px solid #334155; "
-            "border-radius: 4px; padding: 4px 8px; font-size: 11px; font-weight: 600; } "
+            "border-radius: 4px; padding: 4px 10px; font-size: 11px; font-weight: 600; } "
             "QPushButton:hover { background-color: #0F172A; }"
         )
         self.btn_diff_compare.clicked.connect(lambda: self._on_open_diff_dialog())
@@ -1229,6 +1254,8 @@ class MainWindow(QMainWindow):
         if self.active_worker is None:
             self._set_status(get_text("welcome_step1", lang))
 
+    retranslateUi = retranslate_ui
+
     # --- Original / Translation Toggle Logic ---
 
     def update_toggle_button_label(self, button: QPushButton, is_showing_translation: bool) -> None:
@@ -1279,10 +1306,13 @@ class MainWindow(QMainWindow):
         self.render_audio_btn.setEnabled(False)
         self.action_new_project.setEnabled(False)
         self.action_open_project.setEnabled(False)
+        self.language_combo.setEnabled(False)
+        if hasattr(self, "header_bar"):
+            self.header_bar.set_task_running(True)
         self.chat_drawer.set_busy(True)
 
         self.progress_bar.setValue(0)
-        self.eta_label.setText("")
+        self._update_eta_display(0, is_ready=False)
         self.btn_cancel.setEnabled(True)
         self.btn_cancel.setVisible(True)
         self._set_status(initial_status)
@@ -1294,6 +1324,10 @@ class MainWindow(QMainWindow):
             worker.telemetry_live.connect(self._on_live_telemetry_updated)
         worker.cache_Hit.connect(self._on_worker_cache_hit)
         worker.cancelled.connect(self._on_worker_cancelled)
+        if hasattr(worker, "task_canceled"):
+            worker.task_canceled.connect(self._on_worker_cancelled)
+
+    _track_worker = _begin_task
 
     def _end_task(self, reset_progress: bool = False) -> None:
         """Unlock UI buttons and hide the Cancel button when a task finishes, fails, or cancels."""
@@ -1308,48 +1342,74 @@ class MainWindow(QMainWindow):
         self.render_audio_btn.setEnabled(True)
         self.action_new_project.setEnabled(True)
         self.action_open_project.setEnabled(True)
+        self.language_combo.setEnabled(True)
+        if hasattr(self, "header_bar"):
+            self.header_bar.set_task_running(False)
         self.chat_drawer.set_busy(False)
 
         self.btn_cancel.setVisible(False)
         self.btn_cancel.setEnabled(True)
         if reset_progress:
             self.progress_bar.setValue(0)
-            self.eta_label.setText("")
+            self._update_eta_display(0, is_ready=False)
         self.update_telemetry()
 
     def _on_live_telemetry_updated(self, _live_data: Optional[Dict[str, Any]] = None) -> None:
         """Handle progressive live cost and token accumulation updates."""
         self.update_telemetry()
 
+    def _update_eta_display(self, eta_seconds: int, is_ready: bool = False) -> None:
+        """Update ETA prefix and value labels with font metric adjustments."""
+        if is_ready:
+            self.eta_prefix_label.setText("")
+            self.eta_prefix_label.setFixedWidth(0)
+            self.eta_value_label.setText(get_text("eta_ready", self.current_language))
+            return
+
+        if eta_seconds > 0:
+            prefix_text = "남은 시간:" if self.current_language == "ko" else "ETA:"
+            self.eta_prefix_label.setText(prefix_text)
+            fm = self.eta_prefix_label.fontMetrics()
+            prefix_width = fm.horizontalAdvance(prefix_text) + 4
+            self.eta_prefix_label.setFixedWidth(prefix_width)
+            self.eta_value_label.setText(f"~{eta_seconds}s")
+        else:
+            self.eta_prefix_label.setText("")
+            self.eta_prefix_label.setFixedWidth(0)
+            self.eta_value_label.setText("")
+
     def _on_cancel_active_task(self) -> None:
-        """Cooperatively request interruption of the active QThread worker."""
+        """Cooperatively request interruption of the active QThread worker and restore UI immediately."""
         if self.active_worker is not None:
             self.btn_cancel.setEnabled(False)
             self._set_status(get_text("status_canceling", self.current_language))
+            if hasattr(self.active_worker, "stop_requested"):
+                self.active_worker.stop_requested.set()
             self.active_worker.requestInterruption()
+            if hasattr(self.active_worker, "cancel"):
+                self.active_worker.cancel()
+            self._on_worker_cancelled()
 
     def _on_worker_detailed_progress(self, percentage: int, eta_seconds: int, status_text: str) -> None:
         self.progress_bar.setValue(max(0, min(100, percentage)))
         if status_text == "CACHE_HIT":
-            self.eta_label.setText(get_text("eta_ready", self.current_language))
+            self._update_eta_display(0, is_ready=True)
             self._set_status(get_text("status_cache_hit", self.current_language))
             return
 
         if eta_seconds > 0:
-            self.eta_label.setText(
-                get_text("eta_Prefix", self.current_language).format(seconds=eta_seconds)
-            )
+            self._update_eta_display(eta_seconds)
         elif percentage >= 100:
-            self.eta_label.setText(get_text("eta_ready", self.current_language))
+            self._update_eta_display(0, is_ready=True)
         else:
-            self.eta_label.setText("")
+            self._update_eta_display(0, is_ready=False)
 
         if status_text:
             self._set_status(status_text)
 
     def _on_worker_cache_hit(self) -> None:
         self.progress_bar.setValue(100)
-        self.eta_label.setText(get_text("eta_ready", self.current_language))
+        self._update_eta_display(0, is_ready=True)
         self._set_status(get_text("status_cache_hit", self.current_language))
 
     def _on_worker_cancelled(self) -> None:

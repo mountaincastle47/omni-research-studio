@@ -110,11 +110,12 @@ class TestStatusBarLayoutJitter(unittest.TestCase):
         win = MainWindow()
         win.show()
 
-        # 1. ETA Label constraints
-        self.assertEqual(win.eta_label.maximumWidth(), 85)
-        self.assertEqual(win.eta_label.minimumWidth(), 85)
-        align = win.eta_label.alignment()
+        # 1. ETA Value Label constraints (fixed width 55, right aligned)
+        self.assertEqual(win.eta_value_label.maximumWidth(), 55)
+        self.assertEqual(win.eta_value_label.minimumWidth(), 55)
+        align = win.eta_value_label.alignment()
         self.assertTrue(bool(align & Qt.AlignmentFlag.AlignRight))
+        self.assertIsNotNone(win.eta_prefix_label)
 
         # 2. Progress Bar constraints
         self.assertEqual(win.progress_bar.maximumWidth(), 210)
@@ -132,12 +133,12 @@ class TestStatusBarLayoutJitter(unittest.TestCase):
         self.assertEqual(container_layout.contentsMargins().left(), 0)
         self.assertEqual(container_layout.contentsMargins().right(), 0)
 
-        # 5. Jitter resistance test: Changing ETA label text must not change widget width
-        for sample_text in ["ETA: ~142s", "ETA: ~88s", "ETA: ~9s", "Ready", ""]:
-            win.eta_label.setText(sample_text)
+        # 5. Jitter resistance test: Changing ETA value digits must not change widget width
+        for sample_text in ["~142s", "~88s", "~9s", "0s", ""]:
+            win.eta_value_label.setText(sample_text)
             self.app.processEvents()
-            self.assertEqual(win.eta_label.maximumWidth(), 85)
-            self.assertEqual(win.eta_label.minimumWidth(), 85)
+            self.assertEqual(win.eta_value_label.maximumWidth(), 55)
+            self.assertEqual(win.eta_value_label.minimumWidth(), 55)
             self.assertEqual(win.progress_bar.maximumWidth(), 210)
             self.assertEqual(win.progress_bar.minimumWidth(), 210)
             self.assertEqual(win.btn_cancel.maximumWidth(), 90)

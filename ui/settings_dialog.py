@@ -73,6 +73,8 @@ class SettingsDialog(QDialog):
         key_row = QHBoxLayout()
         self.api_key_input = QLineEdit()
         self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.api_key_input.setMaximumWidth(320)
+        self.api_key_input.setCursorPosition(0)
         self.api_key_input.setPlaceholderText("Enter Google Gemini API Key...")
         self.btn_clear_key = QPushButton(get_text("btn_clear_key", self._lang))
         self.btn_clear_key.setFixedHeight(26)

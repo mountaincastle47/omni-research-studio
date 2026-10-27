@@ -32,6 +32,8 @@ from core.storm_discovery import OmniSweepDiscoveryAgent, OmniSweepDiscoveryResu
 from core.translator import TRANSLATION_MODEL, MarkdownTranslator
 
 
+import threading
+
 class BaseCancellableWorker(QThread):
     """Base QThread supporting cooperative cancellation, live streaming chunks, and interpolated ETA updates."""
 
@@ -41,18 +43,27 @@ class BaseCancellableWorker(QThread):
     telemetry_live = pyqtSignal(dict)  # (live token and cost metrics)
     cache_Hit = pyqtSignal()
     cancelled = pyqtSignal()
+    task_canceled = pyqtSignal()
 
     def __init__(self, cache_manager: Optional[CacheManager] = None) -> None:
         super().__init__()
+        self.stop_requested = threading.Event()
         self._is_cancelled: bool = False
         self.cache_manager: CacheManager = cache_manager or GLOBAL_CACHE
         from core.memory_guard import MemoryGuard
         self.finished.connect(lambda: MemoryGuard.clean())
+        self.cancelled.connect(self.task_canceled.emit)
 
     def requestInterruption(self) -> None:
         """Set cooperative cancellation flag in addition to QThread interruption state."""
+        self.stop_requested.set()
         self._is_cancelled = True
         super().requestInterruption()
+        try:
+            self.task_canceled.emit()
+            self.cancelled.emit()
+        except Exception:
+            pass
 
     def cancel(self) -> None:
         """Alias for cooperative cancellation."""
@@ -60,7 +71,7 @@ class BaseCancellableWorker(QThread):
 
     def is_cancelled(self) -> bool:
         """Check whether interruption or cancellation has been requested."""
-        return self._is_cancelled or self.isInterruptionRequested()
+        return self.stop_requested.is_set() or self._is_cancelled or self.isInterruptionRequested()
 
 
 class OmniSweepWorker(BaseCancellableWorker):
