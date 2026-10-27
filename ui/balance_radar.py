@@ -166,11 +166,15 @@ class _RadarCanvas(QWidget):
 
         w = self.width()
         h = self.height()
-        cx = w / 2.0
-        cy = h / 2.0 + 4.0
 
-        # Maintain at least 20px buffer from outer borders for text rendering
-        radius = min(w * 0.28, h * 0.32)
+        # Enforce 20px padding around chart canvas bounds to prevent outer clipping
+        padding = 20.0
+        avail_w = max(40.0, w - 2 * padding)
+        avail_h = max(40.0, h - 2 * padding)
+        cx = padding + avail_w / 2.0
+        cy = padding + avail_h / 2.0 + 4.0
+
+        radius = min(avail_w * 0.28, avail_h * 0.32)
         radius = max(35.0, min(75.0, radius))
 
         # 3 Axes at 90 deg (top), 210 deg (bottom-left), 330 deg (bottom-right)

@@ -37,16 +37,16 @@ class InactivityWatchdog:
         self.total_stall_limit = total_stall_limit
         self.on_timeout = on_timeout
         self.stop_requested = threading.Event()
-        self._last_heartbeat: float = time.monotonic()
-        self._task_start: float = time.monotonic()
+        self._last_heartbeat: float = time.time()
+        self._task_start: float = time.time()
         self._current_stage: str = "init"
         self._is_active: bool = False
         self._thread: Optional[threading.Thread] = None
 
     def start(self, initial_stage: str = "init") -> None:
         self.stop_requested.clear()
-        self._last_heartbeat = time.monotonic()
-        self._task_start = time.monotonic()
+        self._last_heartbeat = time.time()
+        self._task_start = time.time()
         self._current_stage = initial_stage
         self._is_active = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -54,7 +54,7 @@ class InactivityWatchdog:
 
     def heartbeat(self, stage: Optional[str] = None) -> None:
         """Call this on every network packet, search hit, or progress increment."""
-        self._last_heartbeat = time.monotonic()
+        self._last_heartbeat = time.time()
         if stage:
             self._current_stage = stage
 
@@ -63,13 +63,12 @@ class InactivityWatchdog:
 
     def _loop(self) -> None:
         while self._is_active and not self.stop_requested.is_set():
-            time.sleep(1.0)
-            now = time.monotonic()
-            idle = now - self._last_heartbeat
-            total_elapsed = now - self._task_start
-
-            if idle >= self.timeout_seconds or total_elapsed >= self.total_stall_limit:
+            time.sleep(min(0.2, max(0.02, self.timeout_seconds / 4.0)))
+            now = time.time()
+            elapsed = now - self._last_heartbeat
+            if elapsed >= self.timeout_seconds:
+                reported_elapsed = round(elapsed, 1)
                 self.stop_requested.set()
                 if self.on_timeout:
-                    self.on_timeout(self._current_stage, idle)
+                    self.on_timeout(self._current_stage, reported_elapsed)
                 break

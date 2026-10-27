@@ -18,6 +18,7 @@ from core.audio_studio import (
 from core.cache_manager import GLOBAL_CACHE, CacheManager
 from core.config import ConfigManager, DEFAULT_SYNTHESIS_MODEL
 from core.cost_tracker import GLOBAL_COST_TRACKER
+from core.database import get_db_connection
 from core.document_loader import SourceDocument
 from core.followup_engine import FOLLOWUP_MODEL, FollowUpEngine
 from core.local_llm_client import is_local_model
@@ -87,10 +88,11 @@ class BaseCancellableWorker(QThread):
                 idle_sec = now - self._last_heartbeat
                 total_sec = now - self._task_start
                 if idle_sec >= self._watchdog_timeout or total_sec >= self._total_stall_limit:
+                    reported_elapsed = round(max(idle_sec, total_sec if total_sec >= self._total_stall_limit else idle_sec), 1)
                     self.stop_requested.set()
                     self._is_cancelled = True
                     try:
-                        self.task_timed_out.emit(self._current_stage, idle_sec)
+                        self.task_timed_out.emit(self._current_stage, reported_elapsed)
                         self.cancelled.emit()
                     except Exception:
                         pass
@@ -157,6 +159,7 @@ class OmniSweepWorker(BaseCancellableWorker):
         self.scrape_status_text = scrape_status_text
 
     def run(self) -> None:
+        get_db_connection()
         self.start_watchdog("omnisweep_phase_1")
         try:
             if self.is_cancelled():
@@ -321,12 +324,14 @@ class OmniSweepWorker(BaseCancellableWorker):
                 self.progress_Detailed.emit(100, 0, "omnisweep_phase_4")
                 self.finished_Success.emit(result)
             except TaskCancelledError:
+                self.stop_watchdog()
                 with state_lock:
                     state["stop_ticker"] = True
                 GLOBAL_COST_TRACKER.cancel_task(task_id, commit_partial=True)
                 self.telemetry_live.emit(GLOBAL_COST_TRACKER.get_live_totals().to_dict())
                 self.cancelled.emit()
             except Exception as exc:
+                self.stop_watchdog()
                 with state_lock:
                     state["stop_ticker"] = True
                 GLOBAL_COST_TRACKER.cancel_task(task_id, commit_partial=True)
@@ -392,40 +397,8 @@ class SynthesisWorker(BaseCancellableWorker):
         return self.cache_manager.compute_hash(serialized)
 
     def run(self) -> None:
-        if self.is_cancelled():
-            self.cancelled.emit()
-            return
-
-        model_name = self.model_override or self.config_manager.config.synthesis_model
-        active_docs = [d for d in self.documents if d.enabled]
-        corpus_hash = self._compute_corpus_hash()
-
-        # 1. Global Cache Check
-        cached_report = self.cache_manager.get_synthesis(self.query, corpus_hash, model_name)
-        if cached_report is not None:
-            if self.is_cancelled():
-                self.cancelled.emit()
-                return
-            citations = NotebookSynthesizer.extract_citations_for_documents(
-                cached_report, active_docs
-            )
-            cached_result = SynthesisResult(
-                query=self.query.strip(),
-                model_used=model_name,
-                markdown_report=cached_report,
-                citations_used=citations,
-                total_sources_provided=len(active_docs),
-                from_cache=True,
-            )
-            self.progress_Detailed.emit(100, 0, "CACHE_HIT")
-            self.cache_Hit.emit()
-            self.finished_Success.emit(cached_result)
-            return
-
-        # Phase 1 (0% -> 15%): Context packing & token indexing
-        status_p1 = f"Phase 1/4: Packing {len(active_docs)} sources & indexing context..."
-        self.progress_Detailed.emit(15, 18, status_p1)
-
+        get_db_connection()
+        self.start_watchdog("synthesis_phase_1")
         state_lock = threading.Lock()
         state = {
             "phase": 2,  # 2 = TTFT reasoning (15->45%), 3 = Streaming (45->95%)
@@ -436,54 +409,90 @@ class SynthesisWorker(BaseCancellableWorker):
             "stream_start_time": 0.0,
             "last_eta": 18,
             "last_eta_update": time.monotonic(),
-            "status_text": f"Phase 2/4: Reasoning across {len(active_docs)} sources ({model_name})...",
+            "status_text": "Phase 2/4: Reasoning across sources...",
             "stop_ticker": False,
         }
-
-        def _synth_ticker() -> None:
-            while True:
-                time.sleep(0.25)
-                if self.is_cancelled():
-                    break
-                now = time.monotonic()
-                with state_lock:
-                    if state["stop_ticker"]:
-                        break
-                    phase = int(state["phase"])
-                    cur = float(state["current_pct"])
-                    if phase == 2:
-                        # Creep from 15% to 45% over ~5s (1.5% per 250ms tick)
-                        cur = min(44.5, cur + 1.5)
-                        state["current_pct"] = cur
-                        if now - float(state["last_eta_update"]) >= 1.0:
-                            elapsed = now - float(state["start_time"])
-                            state["last_eta"] = max(4, int(round(18.0 - elapsed)))
-                            state["last_eta_update"] = now
-                    elif phase == 3:
-                        chars = int(state["chars_streamed"])
-                        exp = max(500, int(state["expected_chars"]))
-                        ratio = min(1.0, chars / exp)
-                        target_pct = 45.0 + ratio * 50.0  # 45% -> 95%
-                        cur = max(cur, min(95.0, target_pct))
-                        state["current_pct"] = cur
-                        if now - float(state["last_eta_update"]) >= 1.0:
-                            stream_elapsed = max(0.25, now - float(state["stream_start_time"]))
-                            rate = max(80.0, chars / stream_elapsed)
-                            rem_chars = max(0, exp - chars)
-                            state["last_eta"] = max(1, int(round(rem_chars / rate)))
-                            state["last_eta_update"] = now
-
-                    pct_int = max(1, min(95, int(round(cur))))
-                    eta_int = int(state["last_eta"])
-                    st_msg = str(state["status_text"])
-
-                self.progress_Detailed.emit(pct_int, eta_int, st_msg)
-
-        ticker_thread = threading.Thread(target=_synth_ticker, daemon=True)
-        ticker_thread.start()
-
         task_id = f"synthesis_{id(self)}"
         try:
+            if self.is_cancelled():
+                self.cancelled.emit()
+                return
+
+            model_name = self.model_override or self.config_manager.config.synthesis_model
+            active_docs = [d for d in self.documents if d.enabled]
+            corpus_hash = self._compute_corpus_hash()
+
+            # 1. Global Cache Check
+            cached_report = self.cache_manager.get_synthesis(self.query, corpus_hash, model_name)
+            if cached_report is not None:
+                if self.is_cancelled():
+                    self.cancelled.emit()
+                    return
+                citations = NotebookSynthesizer.extract_citations_for_documents(
+                    cached_report, active_docs
+                )
+                cached_result = SynthesisResult(
+                    query=self.query.strip(),
+                    model_used=model_name,
+                    markdown_report=cached_report,
+                    citations_used=citations,
+                    total_sources_provided=len(active_docs),
+                    from_cache=True,
+                )
+                self.progress_Detailed.emit(100, 0, "CACHE_HIT")
+                self.cache_Hit.emit()
+                self.finished_Success.emit(cached_result)
+                return
+
+            # Phase 1 (0% -> 15%): Context packing & token indexing
+            status_p1 = f"Phase 1/4: Packing {len(active_docs)} sources & indexing context..."
+            self.progress_Detailed.emit(15, 18, status_p1)
+
+            state["status_text"] = f"Phase 2/4: Reasoning across {len(active_docs)} sources ({model_name})..."
+
+            def _synth_ticker() -> None:
+                while True:
+                    time.sleep(0.25)
+                    if self.is_cancelled():
+                        break
+                    now = time.monotonic()
+                    with state_lock:
+                        if state["stop_ticker"]:
+                            break
+                        phase = int(state["phase"])
+                        cur = float(state["current_pct"])
+                        if phase == 2:
+                            # Creep from 15% to 45% over ~5s (1.5% per 250ms tick)
+                            cur = min(44.5, cur + 1.5)
+                            state["current_pct"] = cur
+                            if now - float(state["last_eta_update"]) >= 1.0:
+                                elapsed = now - float(state["start_time"])
+                                state["last_eta"] = max(4, int(round(18.0 - elapsed)))
+                                state["last_eta_update"] = now
+                        elif phase == 3:
+                            chars = int(state["chars_streamed"])
+                            exp = max(500, int(state["expected_chars"]))
+                            ratio = min(1.0, chars / exp)
+                            target_pct = 45.0 + ratio * 50.0  # 45% -> 95%
+                            cur = max(cur, min(95.0, target_pct))
+                            state["current_pct"] = cur
+                            if now - float(state["last_eta_update"]) >= 1.0:
+                                stream_elapsed = max(0.25, now - float(state["stream_start_time"]))
+                                rate = max(80.0, chars / stream_elapsed)
+                                rem_chars = max(0, exp - chars)
+                                state["last_eta"] = max(1, int(round(rem_chars / rate)))
+                                state["last_eta_update"] = now
+
+                        pct_int = max(1, min(95, int(round(cur))))
+                        eta_int = int(state["last_eta"])
+                        st_msg = str(state["status_text"])
+
+                    self.record_heartbeat(st_msg)
+                    self.progress_Detailed.emit(pct_int, eta_int, st_msg)
+
+            ticker_thread = threading.Thread(target=_synth_ticker, daemon=True)
+            ticker_thread.start()
+
             if self.is_cancelled():
                 self.cancelled.emit()
                 return
@@ -515,6 +524,7 @@ class SynthesisWorker(BaseCancellableWorker):
                         state["current_pct"] = max(45.0, float(state["current_pct"]))
                         state["status_text"] = f"Phase 3/4: Streaming grounded synthesis ({model_name})..."
                     state["chars_streamed"] = int(state["chars_streamed"]) + len(chunk_text)
+                self.record_heartbeat("Phase 3/4: Streaming grounded synthesis...")
                 self.chunk_received.emit(chunk_text, "synthesis")
                 GLOBAL_COST_TRACKER.accumulate_chunk(task_id, chunk_text)
                 self.telemetry_live.emit(GLOBAL_COST_TRACKER.get_live_totals().to_dict())
@@ -538,6 +548,7 @@ class SynthesisWorker(BaseCancellableWorker):
                 return
 
             # Phase 4 (95% -> 100%): Final HTML rendering
+            self.record_heartbeat("Phase 4/4: Finalizing HTML report & citations...")
             self.progress_Detailed.emit(97, 1, "Phase 4/4: Finalizing HTML report & citations...")
             self.cache_manager.set_synthesis(
                 self.query, corpus_hash, model_name, result.markdown_report
@@ -545,16 +556,21 @@ class SynthesisWorker(BaseCancellableWorker):
             self.progress_Detailed.emit(100, 0, "Grounded synthesis complete.")
             self.finished_Success.emit(result)
         except TaskCancelledError:
+            self.stop_watchdog()
             with state_lock:
                 state["stop_ticker"] = True
             GLOBAL_COST_TRACKER.cancel_task(task_id, commit_partial=True)
             self.telemetry_live.emit(GLOBAL_COST_TRACKER.get_live_totals().to_dict())
             self.cancelled.emit()
         except Exception as exc:
-            with state_lock:
-                state["stop_ticker"] = True
-            GLOBAL_COST_TRACKER.cancel_task(task_id, commit_partial=True)
-            self.telemetry_live.emit(GLOBAL_COST_TRACKER.get_live_totals().to_dict())
+            self.stop_watchdog()
+            try:
+                with state_lock:
+                    state["stop_ticker"] = True
+                GLOBAL_COST_TRACKER.cancel_task(task_id, commit_partial=True)
+                self.telemetry_live.emit(GLOBAL_COST_TRACKER.get_live_totals().to_dict())
+            except Exception:
+                pass
             if self.is_cancelled():
                 self.cancelled.emit()
                 return
@@ -563,6 +579,8 @@ class SynthesisWorker(BaseCancellableWorker):
             else:
                 detail = f"{exc}\n\n{traceback.format_exc()}"
                 self.failed_Error.emit(detail)
+        finally:
+            self.stop_watchdog()
 
 
 class AudioWorker(BaseCancellableWorker):
