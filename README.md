@@ -78,11 +78,12 @@
 
 ## Compiling Standalone Executable
 
+> **Prefer a ready-to-run app?** You do not need to compile from source or install Python. Download the pre-built standalone Windows binary (`OmniResearchStudio.exe`) directly from the [Releases](https://github.com/mountaincastle47/omni-research-studio/releases) section.
+
 OmniResearch Studio includes an automated single-file build harness that produces a standalone Windows executable (`dist/OmniResearchStudio.exe`):
 
-```bash
-.venv\Scripts\activate
-python package.py
+```cmd
+.venv\Scripts\python.exe package.py
 ```
 
 ### Build Harness Highlights
