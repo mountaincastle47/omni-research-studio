@@ -1,0 +1,53 @@
+# Environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Build artifacts
+dist/
+build/
+*.spec
+*.exe
+*.bin
+*.dll
+*.so
+*.dylib
+*.egg-info/
+
+# Secrets & Local Configurations
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+credentials.json
+config.json
+settings.json
+storage/
+
+# Databases & Runtime Data
+*.sqlite
+*.sqlite3
+*.db
+session_cache/
+logs/
+*.log
+
+# Python Cache & Testing
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDEs & System Files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

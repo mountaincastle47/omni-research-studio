@@ -1,0 +1,143 @@
+"""Resilient retry wrapper with exponential backoff, jitter, and cooperative cancellation for Gemini API calls."""
+
+from __future__ import annotations
+
+import functools
+import logging
+import random
+import time
+from typing import Any, Callable, Optional, TypeVar
+
+from google.genai import errors as genai_errors
+
+
+logger = logging.getLogger("OmniResearch.Resilience")
+
+T = TypeVar("T")
+
+RATE_LIMIT_USER_MESSAGE = (
+    "API Rate Limit Exceeded (429): Google has temporarily rate-limited your API key. "
+    "If you are on the Free Tier, wait 60 seconds before retrying, decrease the number of active perspectives, "
+    "or enable Pay-As-You-Go in Google AI Studio to increase your RPM quota."
+)
+
+
+class TaskCancelledError(Exception):
+    """Raised when a background task is cooperatively aborted by the user."""
+
+
+def is_rate_limit_error(exc: BaseException) -> bool:
+    """Detect whether an exception corresponds to HTTP 429 or RESOURCE_EXHAUSTED."""
+    if isinstance(exc, genai_errors.APIError):
+        code = getattr(exc, "code", None)
+        status = str(getattr(exc, "status", "") or "").upper()
+        message = str(getattr(exc, "message", "") or "").upper()
+        if code == 429 or "429" in status or "RESOURCE_EXHAUSTED" in status or "RESOURCE_EXHAUSTED" in message:
+            return True
+
+    text = str(exc).upper()
+    return "429" in text or "RESOURCE_EXHAUSTED" in text or "RATE LIMIT" in text or "QUOTA" in text
+
+
+def sleep_with_cancel_check(
+    duration: float,
+    cancel_check: Optional[Callable[[], bool]] = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> None:
+    """Sleep for `duration` seconds in responsive slices if using standard `time.sleep`, checking `cancel_check`."""
+    if cancel_check and cancel_check():
+        raise TaskCancelledError("Task aborted by user.")
+
+    if sleep_fn is not time.sleep:
+        sleep_fn(duration)
+        if cancel_check and cancel_check():
+            raise TaskCancelledError("Task aborted by user.")
+        return
+
+    remaining = max(0.0, duration)
+    step = 0.1
+    while remaining > 0:
+        if cancel_check and cancel_check():
+            raise TaskCancelledError("Task aborted by user.")
+        chunk = min(step, remaining)
+        time.sleep(chunk)
+        remaining -= chunk
+
+
+def call_with_exponential_backoff(
+    func: Callable[..., T],
+    *args: Any,
+    max_retries: int = 4,
+    initial_wait: float = 2.0,
+    multiplier: float = 2.0,
+    max_backoff: float = 30.0,
+    progress_callback: Optional[Callable[[str], None]] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    **kwargs: Any,
+) -> T:
+    """Execute `func(*args, **kwargs)` with exponential backoff, jitter, and cooperative cancellation checks."""
+    attempt = 0
+    while True:
+        if cancel_check and cancel_check():
+            raise TaskCancelledError("Task aborted by user.")
+
+        try:
+            result = func(*args, **kwargs)
+            if cancel_check and cancel_check():
+                raise TaskCancelledError("Task aborted by user.")
+            return result
+        except TaskCancelledError:
+            raise
+        except Exception as exc:
+            if cancel_check and cancel_check():
+                raise TaskCancelledError("Task aborted by user.")
+
+            if not is_rate_limit_error(exc) or attempt >= max_retries:
+                raise
+
+            attempt += 1
+            base_delay = min(max_backoff, initial_wait * (multiplier ** (attempt - 1)))
+            jitter = random.uniform(0.0, min(1.0, base_delay * 0.25))
+            wait_seconds = min(max_backoff, base_delay + jitter)
+
+            warn_msg = (
+                f"Rate limit (429 RESOURCE_EXHAUSTED) encountered. "
+                f"Retry attempt {attempt}/{max_retries} in {wait_seconds:.1f}s..."
+            )
+            logger.warning(warn_msg)
+            print(f"[WARNING] {warn_msg}", flush=True)
+            if progress_callback is not None:
+                progress_callback(warn_msg)
+
+            sleep_with_cancel_check(wait_seconds, cancel_check=cancel_check, sleep_fn=sleep_fn)
+
+
+def with_exponential_backoff(
+    max_retries: int = 4,
+    initial_wait: float = 2.0,
+    multiplier: float = 2.0,
+    max_backoff: float = 30.0,
+) -> Callable[[Callable[..., T]], Callable[..., T]]:
+    """Decorator wrapping a callable with 429 / RESOURCE_EXHAUSTED exponential backoff."""
+
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        @functools.wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> T:
+            progress_cb = kwargs.pop("_progress_callback", None)
+            cancel_cb = kwargs.pop("_cancel_check", None)
+            return call_with_exponential_backoff(
+                func,
+                *args,
+                max_retries=max_retries,
+                initial_wait=initial_wait,
+                multiplier=multiplier,
+                max_backoff=max_backoff,
+                progress_callback=progress_cb,
+                cancel_check=cancel_cb,
+                **kwargs,
+            )
+
+        return wrapper
+
+    return decorator
