@@ -6,6 +6,7 @@ import re
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, List, Optional
+import concurrent.futures
 from urllib.parse import urlparse
 
 from google import genai
@@ -37,9 +38,15 @@ def _generate_content_with_retry(
     model: str,
     contents: str,
     config: types.GenerateContentConfig,
+    heartbeat_callback: Optional[Callable[[str], None]] = None,
 ) -> types.GenerateContentResponse:
     """Execute generate_content with tenacity exponential jitter retry against HTTP 429 and resource exhaustion."""
-    return client.models.generate_content(model=model, contents=contents, config=config)
+    if heartbeat_callback:
+        heartbeat_callback("omnisweep_phase_2")
+    res = client.models.generate_content(model=model, contents=contents, config=config)
+    if heartbeat_callback:
+        heartbeat_callback("omnisweep_phase_2")
+    return res
 
 
 STRICT_FORMATTING_RULE = (
@@ -481,19 +488,18 @@ class OmniSweepDiscoveryAgent:
         report: PerspectiveReport,
         progress_callback: Optional[Callable[[str], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
+        heartbeat_callback: Optional[Callable[[str], None]] = None,
     ) -> List[ScrapedSource]:
-        """Fetch full text for the top authoritative grounding links; fall back to the Google snippet on failure."""
+        """Fetch full text for top authoritative grounding links with concurrent futures, per-future timeouts, and heartbeat updates."""
         targets = select_authoritative_references(
             report.grounding_references, limit=self.max_scrape_per_perspective
         )
-        results: List[ScrapedSource] = []
-        for position, ref in enumerate(targets, start=1):
+        if not targets:
+            return []
+
+        def _fetch_single(ref: Any) -> ScrapedSource:
             if cancel_check and cancel_check():
                 raise TaskCancelledError("Task aborted by user.")
-            if progress_callback:
-                progress_callback(
-                    f"[{report.perspective_name}] {self.scrape_status_text} ({position}/{len(targets)})"
-                )
             article = None
             try:
                 article = self.article_fetcher(ref.uri, self.scrape_timeout)
@@ -511,20 +517,52 @@ class OmniSweepDiscoveryAgent:
                 full_text = False
                 final_uri = ref.uri
 
-            results.append(
-                ScrapedSource(
-                    title=page_title,
+            return ScrapedSource(
+                title=page_title,
+                uri=final_uri,
+                perspective_name=report.perspective_name,
+                text=text,
+                full_text=full_text,
+                origin_tag=detect_linguistic_origin_tag(
+                    f"{page_title} {text[:600]}",
                     uri=final_uri,
                     perspective_name=report.perspective_name,
-                    text=text,
-                    full_text=full_text,
-                    origin_tag=detect_linguistic_origin_tag(
-                        f"{page_title} {text[:600]}",
-                        uri=final_uri,
-                        perspective_name=report.perspective_name,
-                    ),
-                )
+                ),
             )
+
+        results: List[ScrapedSource] = []
+        max_workers = min(len(targets), 3)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_ref = {executor.submit(_fetch_single, ref): ref for ref in targets}
+            for future in concurrent.futures.as_completed(future_to_ref, timeout=self.scrape_timeout * 2.5):
+                if cancel_check and cancel_check():
+                    raise TaskCancelledError("Task aborted by user.")
+                try:
+                    res = future.result(timeout=1.0)
+                    results.append(res)
+                except Exception:
+                    ref = future_to_ref[future]
+                    results.append(
+                        ScrapedSource(
+                            title=ref.title or ref.uri,
+                            uri=ref.uri,
+                            perspective_name=report.perspective_name,
+                            text=ref.snippet or "Grounding snippet fallback.",
+                            full_text=False,
+                            origin_tag=detect_linguistic_origin_tag(
+                                f"{ref.title} {ref.snippet[:600]}",
+                                uri=ref.uri,
+                                perspective_name=report.perspective_name,
+                            ),
+                        )
+                    )
+                if heartbeat_callback:
+                    heartbeat_callback("omnisweep_phase_2")
+                if progress_callback:
+                    progress_callback(
+                        f"[{report.perspective_name}] {self.scrape_status_text} ({len(results)}/{len(targets)})"
+                    )
+
         return results
 
     def run_discovery(
@@ -536,6 +574,7 @@ class OmniSweepDiscoveryAgent:
         step_progress_callback: Optional[Callable[[int, int, str, int], None]] = None,
         subphase_callback: Optional[Callable[[int, int, str, float], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
+        heartbeat_callback: Optional[Callable[[str], None]] = None,
     ) -> OmniSweepDiscoveryResult:
         """Run multi-perspective grounded web discovery with 3 sub-phases per perspective and ETA tracking."""
         cleaned_topic = topic.strip()
@@ -605,29 +644,41 @@ class OmniSweepDiscoveryAgent:
             # Sub-phase 2: Search grounding (60% of perspective slice -> 75% cumulative within slice)
             if subphase_callback:
                 subphase_callback(index, total, f"[{index}/{total}] {p_name} — (2/3) Google Search grounding...", 0.75)
+            if heartbeat_callback:
+                heartbeat_callback("omnisweep_phase_2")
 
-            report = call_with_exponential_backoff(
-                self._investigate_perspective,
-                topic=cleaned_topic,
-                perspective_id=p_id,
-                perspective_name=p_name,
-                perspective_role=p_role,
-                corpus_summary=corpus_summary,
-                formulated_queries=formulated_queries,
-                progress_callback=progress_callback,
-                cancel_check=cancel_check,
-            )
-
-            if cancel_check and cancel_check():
-                raise TaskCancelledError("Task aborted by user.")
-
-            # Tier-2: deep full-text ingestion of the top authoritative links (between cancellation checks)
-            if self.deep_scrape and report.grounding_references:
-                report.scraped_sources = self.scrape_perspective_sources(
-                    report,
+            try:
+                report = call_with_exponential_backoff(
+                    self._investigate_perspective,
+                    topic=cleaned_topic,
+                    perspective_id=p_id,
+                    perspective_name=p_name,
+                    perspective_role=p_role,
+                    corpus_summary=corpus_summary,
+                    formulated_queries=formulated_queries,
                     progress_callback=progress_callback,
                     cancel_check=cancel_check,
+                    heartbeat_callback=heartbeat_callback,
                 )
+
+                if cancel_check and cancel_check():
+                    raise TaskCancelledError("Task aborted by user.")
+
+                if heartbeat_callback:
+                    heartbeat_callback("omnisweep_phase_2")
+
+                # Tier-2: deep full-text ingestion of the top authoritative links (between cancellation checks)
+                if self.deep_scrape and report.grounding_references:
+                    report.scraped_sources = self.scrape_perspective_sources(
+                        report,
+                        progress_callback=progress_callback,
+                        cancel_check=cancel_check,
+                        heartbeat_callback=heartbeat_callback,
+                    )
+            except Exception as e:
+                if heartbeat_callback:
+                    heartbeat_callback("omnisweep_phase_2")
+                raise
 
             # Sub-phase 3: Perspective synthesis (25% of perspective slice -> 100% cumulative within slice)
             if subphase_callback:
@@ -723,6 +774,7 @@ class OmniSweepDiscoveryAgent:
         perspective_role: str,
         corpus_summary: str,
         formulated_queries: Optional[List[str]] = None,
+        heartbeat_callback: Optional[Callable[[str], None]] = None,
     ) -> PerspectiveReport:
         """Execute grounded search and analysis for a single expert viewpoint."""
         if formulated_queries is None:
@@ -780,6 +832,7 @@ class OmniSweepDiscoveryAgent:
             system_instruction=system_instruction,
             temperature=0.3,
             tools=[types.Tool(google_search=types.GoogleSearch())],
+            http_options=types.HttpOptions(timeout=30.0),
         )
 
         response = _generate_content_with_retry(
@@ -787,6 +840,7 @@ class OmniSweepDiscoveryAgent:
             model=self.model_name,
             contents=prompt,
             config=config,
+            heartbeat_callback=heartbeat_callback,
         )
 
         analysis_text = (response.text or "").strip()

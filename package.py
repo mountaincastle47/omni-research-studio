@@ -118,6 +118,13 @@ def run_packaging(clean: bool = True) -> int:
             shutil.rmtree(build_dir, ignore_errors=True)
         if onedir_target.exists() and onedir_target.is_dir():
             shutil.rmtree(onedir_target, ignore_errors=True)
+        if dist_dir.exists():
+            for item in dist_dir.glob("*"):
+                if item.is_file() and is_blacklisted_artifact(item):
+                    try:
+                        item.unlink()
+                    except Exception:
+                        pass
 
     print("[Package] Launching PyInstaller single-file compilation pipeline (--onefile)...")
     t0 = time.time()

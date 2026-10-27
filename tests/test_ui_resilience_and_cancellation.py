@@ -200,7 +200,7 @@ class TestUiResilienceAndCancellation(unittest.TestCase):
         widget.canvas.repaint()
         self.app.processEvents()
         self.assertEqual(widget.canvas.minimumSize().width(), 250)
-        self.assertEqual(widget.canvas.minimumSize().height(), 200)
+        self.assertEqual(widget.canvas.minimumSize().height(), 260)
         widget.close()
 
     def test_sqlite_cross_thread_isolation(self) -> None:

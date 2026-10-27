@@ -46,7 +46,9 @@ class EpistemicBalanceWidget(QWidget):
 
         # Radar Canvas with guaranteed layout margins
         self.canvas = _RadarCanvas(self)
-        self.canvas.setMinimumSize(250, 200)
+        self.setMinimumHeight(260)
+        self.canvas.setMinimumSize(250, 260)
+        self.canvas.setMinimumHeight(260)
         layout.addWidget(self.canvas, stretch=1)
 
         # Bias Warning Banner
@@ -164,21 +166,14 @@ class _RadarCanvas(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        w = self.width()
-        h = self.height()
+        w = float(self.width())
+        h = float(self.height())
+        center_x = w / 2.0
+        center_y = (h / 2.0) + 12.0
+        radius = max(85.0, min((w / 2.0) - 110.0, (h / 2.0) - 55.0))
 
-        # Enforce 20px padding around chart canvas bounds to prevent outer clipping
-        padding = 20.0
-        avail_w = max(40.0, w - 2 * padding)
-        avail_h = max(40.0, h - 2 * padding)
-        cx = padding + avail_w / 2.0
-        cy = padding + avail_h / 2.0 + 4.0
-
-        radius = min(avail_w * 0.28, avail_h * 0.32)
-        radius = max(35.0, min(75.0, radius))
-
-        # 3 Axes at 90 deg (top), 210 deg (bottom-left), 330 deg (bottom-right)
-        angles = [-math.pi / 2, -math.pi / 2 + (2 * math.pi / 3), -math.pi / 2 + (4 * math.pi / 3)]
+        # 3 Axes: Top (-90 deg), Bottom-Left (150 deg), Bottom-Right (30 deg)
+        angles = [-math.pi / 2, 5 * math.pi / 6, math.pi / 6]
 
         # 1. Concentric Grid Polygons
         painter.setPen(QPen(QColor("#1E293B"), 1.2, Qt.PenStyle.DashLine))
@@ -187,17 +182,17 @@ class _RadarCanvas(QWidget):
         for factor in (0.33, 0.66, 1.0):
             poly = QPolygonF()
             for a in angles:
-                px = cx + radius * factor * math.cos(a)
-                py = cy + radius * factor * math.sin(a)
+                px = center_x + radius * factor * math.cos(a)
+                py = center_y + radius * factor * math.sin(a)
                 poly.append(QPointF(px, py))
             painter.drawPolygon(poly)
 
         # 2. Axis Spokes
         painter.setPen(QPen(QColor("#334155"), 1.0))
         for a in angles:
-            px = cx + radius * math.cos(a)
-            py = cy + radius * math.sin(a)
-            painter.drawLine(QPointF(cx, cy), QPointF(px, py))
+            px = center_x + radius * math.cos(a)
+            py = center_y + radius * math.sin(a)
+            painter.drawLine(QPointF(center_x, center_y), QPointF(px, py))
 
         # 3. Data Polygon
         scores = [
@@ -209,8 +204,8 @@ class _RadarCanvas(QWidget):
         data_poly = QPolygonF()
         for a, score in zip(angles, scores):
             r_val = radius * max(0.12, min(1.0, score))
-            px = cx + r_val * math.cos(a)
-            py = cy + r_val * math.sin(a)
+            px = center_x + r_val * math.cos(a)
+            py = center_y + r_val * math.sin(a)
             data_poly.append(QPointF(px, py))
 
         # Draw filled shape
@@ -224,7 +219,6 @@ class _RadarCanvas(QWidget):
             painter.drawEllipse(pt, 3.5, 3.5)
 
         # 4. Axis Labels
-        # Format label text into two lines (metric name on line 1, percentage on line 2): f"{name}\n{int(score * 100)}%"
         lang = self._parent_widget._lang
         axis_names = [
             get_text('radar_axis_authority', lang),
@@ -239,27 +233,14 @@ class _RadarCanvas(QWidget):
         painter.setFont(QFont("-apple-system, sans-serif", 8, QFont.Weight.Bold))
         painter.setPen(QColor("#94A3B8"))
 
-        # Outer spoke vertex coordinates
-        x0 = cx + radius * math.cos(angles[0])
-        y0 = cy + radius * math.sin(angles[0])
-
-        x1 = cx + radius * math.cos(angles[1])
-        y1 = cy + radius * math.sin(angles[1])
-
-        x2 = cx + radius * math.cos(angles[2])
-        y2 = cy + radius * math.sin(angles[2])
-
-        # Top Vertex ("Authority Ratio" / "1차 문헌 비율"):
-        # Anchor above the point using Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom
-        top_rect = QRectF(x0 - 90, y0 - 36, 180, 32)
+        # Top vertex: Center above point
+        top_rect = QRectF(center_x - 80, center_y - radius - 44, 160, 40)
         painter.drawText(top_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, labels[0])
 
-        # Bottom-Left Vertex ("Global Diversity" / "다국어 다원성"):
-        # Anchor strictly to the left of the vertex using Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop with an 8px offset (x - 8, y + 4)
-        bl_rect = QRectF(x1 - 8 - 140, y1 + 4, 140, 36)
-        painter.drawText(bl_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop, labels[1])
+        # Bottom-Left vertex ("Global Diversity" / "다국어 다원성"): Anchor outside-left with right alignment
+        bl_rect = QRectF(center_x - radius * 0.866 - 145, center_y + radius * 0.5 - 12, 135, 44)
+        painter.drawText(bl_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, labels[1])
 
-        # Bottom-Right Vertex ("Perspective Spread" / "시각 분산도"):
-        # Anchor strictly to the right of the vertex using Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop with an 8px offset (x + 8, y + 4)
-        br_rect = QRectF(x2 + 8, y2 + 4, 140, 36)
-        painter.drawText(br_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, labels[2])
+        # Bottom-Right vertex ("Perspective Spread" / "시각 분산도"): Anchor outside-right with left alignment
+        br_rect = QRectF(center_x + radius * 0.866 + 10, center_y + radius * 0.5 - 12, 135, 44)
+        painter.drawText(br_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, labels[2])

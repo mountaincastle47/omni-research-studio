@@ -59,10 +59,12 @@ class BaseCancellableWorker(QThread):
         self._is_cancelled: bool = False
         self._last_heartbeat: float = time.monotonic()
         self._task_start: float = time.monotonic()
+        self._stage_start: float = time.monotonic()
         self._current_stage: str = "OmniSweep Discovery"
         self._watchdog_active: bool = False
-        self._watchdog_timeout: float = 60.0  # 60s inactivity watchdog limit
-        self._total_stall_limit: float = 90.0  # 90s total stall limit
+        self._watchdog_timeout: float = 60.0  # 60s inactivity watchdog limit (between heartbeats)
+        self._stage_stall_limit: float = 90.0  # 90s maximum stall in a single stage without progress
+        self._total_stall_limit: float = 600.0  # 10 min absolute ceiling for multi-perspective workflow
         self.cache_manager: CacheManager = cache_manager or GLOBAL_CACHE
         from core.memory_guard import MemoryGuard
         self.finished.connect(lambda: MemoryGuard.clean())
@@ -71,14 +73,16 @@ class BaseCancellableWorker(QThread):
     def record_heartbeat(self, stage: Optional[str] = None) -> None:
         """Refresh heartbeat timestamp whenever a network chunk, search hit, or progress tick is recorded."""
         self._last_heartbeat = time.monotonic()
-        if stage:
+        if stage and stage != self._current_stage:
             self._current_stage = stage
+            self._stage_start = time.monotonic()
 
     def start_watchdog(self, initial_stage: str = "OmniSweep Discovery") -> None:
         """Spawn a background daemon thread checking for stalls."""
         self._watchdog_active = True
         self._last_heartbeat = time.monotonic()
         self._task_start = time.monotonic()
+        self._stage_start = time.monotonic()
         self._current_stage = initial_stage
 
         def _watchdog_loop() -> None:
@@ -86,9 +90,10 @@ class BaseCancellableWorker(QThread):
                 time.sleep(min(0.2, max(0.02, self._watchdog_timeout / 4.0)))
                 now = time.monotonic()
                 idle_sec = now - self._last_heartbeat
+                stage_sec = now - self._stage_start
                 total_sec = now - self._task_start
-                if idle_sec >= self._watchdog_timeout or total_sec >= self._total_stall_limit:
-                    reported_elapsed = round(max(idle_sec, total_sec if total_sec >= self._total_stall_limit else idle_sec), 1)
+                if idle_sec >= self._watchdog_timeout or stage_sec >= self._stage_stall_limit or total_sec >= self._total_stall_limit:
+                    reported_elapsed = round(max(idle_sec, stage_sec if stage_sec >= self._stage_stall_limit else idle_sec), 1)
                     self.stop_requested.set()
                     self._is_cancelled = True
                     try:
@@ -221,7 +226,6 @@ class OmniSweepWorker(BaseCancellableWorker):
                         pct_int = max(1, min(99, int(round(cur))))
                         st_msg = str(state["status_text"])
 
-                    self.record_heartbeat()
                     self.progress_Detailed.emit(pct_int, eta_sec, st_msg)
 
             ticker_thread = threading.Thread(target=_ticker_loop, daemon=True)
@@ -305,6 +309,7 @@ class OmniSweepWorker(BaseCancellableWorker):
                     step_progress_callback=on_step_progress,
                     subphase_callback=on_subphase,
                     cancel_check=self.is_cancelled,
+                    heartbeat_callback=self.record_heartbeat,
                 )
 
                 with state_lock:

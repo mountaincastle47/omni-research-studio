@@ -75,4 +75,5 @@ class OmniSweepController:
             step_progress_callback=_intercepted_step,
             subphase_callback=_intercepted_subphase,
             cancel_check=self.cancel_check,
+            heartbeat_callback=self.heartbeat_callback,
         )
