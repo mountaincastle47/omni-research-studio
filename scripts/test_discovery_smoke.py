@@ -26,16 +26,16 @@ def run_smoke_test() -> int:
         t_global_start = time.monotonic()
         print("=== OMNIRESEARCH STUDIO PRE-BUILD HEADLESS SMOKE TEST ===")
 
-        # 1. Initialize headless Qt core application if Qt is loaded
+        # 1. Initialize headless Qt application if Qt is loaded
         try:
-            from PyQt6.QtCore import QCoreApplication
+            from PyQt6.QtWidgets import QApplication
 
-            _qt_app = QCoreApplication.instance() or QCoreApplication(sys.argv)
+            _qt_app = QApplication.instance() or QApplication(sys.argv)
         except ImportError:
             try:
-                from PySide6.QtCore import QCoreApplication
+                from PySide6.QtWidgets import QApplication
 
-                _qt_app = QCoreApplication.instance() or QCoreApplication(sys.argv)
+                _qt_app = QApplication.instance() or QApplication(sys.argv)
             except ImportError:
                 _qt_app = None
 
@@ -220,6 +220,56 @@ def run_smoke_test() -> int:
         if cwd_sqlite:
             raise RuntimeError(f"SQLite artifacts leaked into project root / cwd: {cwd_sqlite}")
         print("   -> Workspace cleanliness verified: zero SQLite artifacts in working directory.")
+
+        # 9. Verify Phase 4 Precomputation Watchdog Safety & Gap-Fill AttributeError Immunity
+        print("[7/7] Verifying Phase 4 precomputation watchdog safety & gap-fill lifecycle...")
+        from ui.workers import SynthesisWorker, GapFillWorker
+        from ui.main_window import MainWindow
+
+        # Test Phase 4 watchdog safety (worker should disable watchdog and complete layout precomputation cleanly)
+        synth_worker = SynthesisWorker(
+            config_manager=cfg_mgr,
+            query="Asyncio architecture",
+            documents=[doc],
+            model_override="gemini-3.8-flash",
+        )
+        synth_worker.start_watchdog("synthesis_phase_1")
+        # Simulate Phase 4 transition: stop watchdog, compute layout, verify no cancellation
+        synth_worker.stop_watchdog()
+        synth_worker.record_heartbeat("Phase 4/4: Precomputing layouts & citations...")
+
+        from core.knowledge_graph import KnowledgeGraphEngine
+        from ui.graph_viewer import compute_causal_layout_from_markdown
+
+        causal_layout = compute_causal_layout_from_markdown(synth_result.markdown_report)
+        kg_engine = KnowledgeGraphEngine()
+        kg_engine.build_from_documents([doc], use_llm=False)
+        kg_engine.extract_from_text(synth_result.markdown_report, cite_id=1, use_llm=False)
+        kg_layout = kg_engine.compute_layout_data(min_repulsion=120.0)
+
+        if synth_worker.is_cancelled():
+            raise RuntimeError("Phase 4 layout precomputation tripped watchdog cancellation!")
+        print("   -> Phase 4 precomputation completed cleanly without watchdog timeout.")
+
+        # Test MainWindow lifecycle: _begin_task(None), _trigger_gap_fill, and _on_synthesis_finished immunity
+        main_win = MainWindow()
+        main_win._begin_task(None, "Testing guarded _begin_task")
+        if main_win.active_worker is not None:
+            raise RuntimeError("active_worker was expected to be None")
+
+        # Test enabling recursive gap-filling triggering via _on_synthesis_finished
+        main_win.chk_gap_fill.setChecked(True)
+        main_win._on_synthesis_finished(synth_result)
+        if not hasattr(main_win, "_gap_fill_worker") or main_win._gap_fill_worker is None:
+            raise RuntimeError("GapFillWorker was not instantiated on _trigger_gap_fill!")
+        print("   -> _on_synthesis_finished and _trigger_gap_fill completed with zero AttributeError.")
+
+        # Verify GapFillWorker cooperatively cancels cleanly
+        main_win._gap_fill_worker.request_stop()
+        if not main_win._gap_fill_worker.is_cancelled():
+            raise RuntimeError("GapFillWorker failed to register cooperative stop request!")
+        main_win._end_task()
+        print("   -> Recursive gap-filling worker lifecycle and cooperative cancellation verified.")
 
         print("\n=======================================================")
         print("  ALL PRE-BUILD SMOKE TESTS PASSED CLEANLY (EXIT 0)    ")

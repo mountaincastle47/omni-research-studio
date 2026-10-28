@@ -680,15 +680,30 @@ class CitationInspectorWidget(QWidget):
 
         if citations:
             for c in citations:
+                if isinstance(c, (int, str)):
+                    cid = int(c) if isinstance(c, int) or (isinstance(c, str) and c.isdigit()) else 1
+                    title = f"Document [{c}]"
+                    uri = ""
+                    badge = "REFERENCE"
+                    excerpt = ""
+                else:
+                    cid = getattr(c, "cite_id", 1)
+                    title = getattr(c, "title", f"Document [{cid}]")
+                    uri = getattr(c, "path_or_uri", "")
+                    stype = getattr(c, "source_type", "SOURCE")
+                    occ = getattr(c, "occurrences", 1)
+                    badge = f"{str(stype).upper()} • {occ}"
+                    excerpt = getattr(c, "excerpt", "")
+
                 card = GroundingSourceCard(
-                    header_title=f"[{c.cite_id}] {c.title}",
-                    uri=c.path_or_uri,
-                    perspective_badge=f"{c.source_type.upper()} • {c.occurrences}",
-                    snippet=c.excerpt,
+                    header_title=f"[{cid}] {title}",
+                    uri=uri,
+                    perspective_badge=badge,
+                    snippet=excerpt,
                     accent_color="#10B981",
-                    cite_id=c.cite_id,
+                    cite_id=cid,
                 )
-                self._cards_by_cite_id[c.cite_id] = card
+                self._cards_by_cite_id[cid] = card
                 self.cards_layout.addWidget(card)
         else:
             empty_cite = QLabel(get_text("no_citations_yet", self._lang))

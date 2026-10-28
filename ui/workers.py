@@ -582,8 +582,12 @@ class SynthesisWorker(BaseCancellableWorker):
                 self.cancelled.emit()
                 return
 
+            # Disable network inactivity watchdog: LLM synthesis completed, entering local precomputation
+            self.stop_watchdog()
+
             # Phase 4 (95% -> 100%): Precomputing graph layouts & HTML off the main thread
             self.record_heartbeat("Phase 4/4: Precomputing layouts & citations...")
+            self.progress_Changed.emit("Phase 4/4: Precomputing layouts & citations...")
             self.progress_Detailed.emit(97, 1, "Phase 4/4: Precomputing layouts & citations...")
 
             # 1. Background Causal Graph layout computation
@@ -592,21 +596,25 @@ class SynthesisWorker(BaseCancellableWorker):
                 result.causal_layout = compute_causal_layout_from_markdown(result.markdown_report)
             except Exception:
                 result.causal_layout = None
+            self.record_heartbeat("Phase 4/4: Precomputing layouts & citations...")
 
-            # 2. Background Knowledge Graph layout computation
+            # 2. Background Knowledge Graph layout computation (fast heuristic rule-based extraction)
             try:
                 from core.knowledge_graph import KnowledgeGraphEngine
                 kg_engine = KnowledgeGraphEngine()
                 if active_docs:
-                    kg_engine.build_from_documents(active_docs)
+                    kg_engine.build_from_documents(active_docs, use_llm=False)
+                self.record_heartbeat("Phase 4/4: Precomputing layouts & citations...")
                 if result.markdown_report:
-                    kg_engine.extract_from_text(result.markdown_report, cite_id=1)
+                    kg_engine.extract_from_text(result.markdown_report, cite_id=1, use_llm=False)
+                self.record_heartbeat("Phase 4/4: Precomputing layouts & citations...")
                 result.kg_layout = kg_engine.compute_layout_data(min_repulsion=120.0)
                 result.kg_engine = kg_engine
             except Exception:
                 result.kg_layout = None
                 result.kg_engine = None
 
+            self.record_heartbeat("Phase 4/4: Precomputing layouts & citations...")
             self.cache_manager.set_synthesis(
                 self.query, corpus_hash, model_name, result.markdown_report
             )
@@ -1110,13 +1118,25 @@ class GapFillWorker(BaseCancellableWorker):
         model_name: str = DEFAULT_SYNTHESIS_MODEL,
         parent: Optional[QObject] = None,
     ) -> None:
-        super().__init__(parent)
+        super().__init__()
         self.report_markdown = report_markdown
         self.corpus = corpus
         self.base_topic = base_topic
         self.lang = lang
         self.config_manager = config_manager
         self.model_name = model_name
+        self.precomputed_causal_layout: Any = None
+        self.precomputed_kg_layout: Any = None
+        self.precomputed_kg_engine: Any = None
+
+    def request_stop(self) -> None:
+        """Propagate cooperative stop request down to the underlying deep research engine."""
+        super().request_stop()
+        if hasattr(self, "_engine") and self._engine and hasattr(self._engine, "request_stop"):
+            try:
+                self._engine.request_stop()
+            except Exception:
+                pass
 
     def run(self) -> None:
         if self.is_cancelled():
@@ -1134,7 +1154,9 @@ class GapFillWorker(BaseCancellableWorker):
 
             def _progress(msg: str) -> None:
                 if not self.is_cancelled():
+                    self.record_heartbeat("Recursive Gap-Filling")
                     self.status_changed.emit(msg)
+                    self.progress_Changed.emit(msg)
 
             addendum, new_docs = engine.run_gap_filling_loop(
                 report_markdown=self.report_markdown,
@@ -1143,29 +1165,32 @@ class GapFillWorker(BaseCancellableWorker):
                 lang=self.lang,
                 progress_callback=_progress,
             )
-            if not self.is_cancelled():
-                # Background precomputation of updated layouts
-                updated_report = self.report_markdown + (f"\n\n{addendum}" if addendum else "")
-                try:
-                    from ui.graph_viewer import compute_causal_layout_from_markdown
-                    self.precomputed_causal_layout = compute_causal_layout_from_markdown(updated_report)
-                except Exception:
-                    self.precomputed_causal_layout = None
-                try:
-                    from core.knowledge_graph import KnowledgeGraphEngine
-                    kg_engine = KnowledgeGraphEngine()
-                    all_docs = self.corpus.get_all_documents()
-                    if all_docs:
-                        kg_engine.build_from_documents(all_docs)
-                    if updated_report:
-                        kg_engine.extract_from_text(updated_report, cite_id=1)
-                    self.precomputed_kg_layout = kg_engine.compute_layout_data(min_repulsion=120.0)
-                    self.precomputed_kg_engine = kg_engine
-                except Exception:
-                    self.precomputed_kg_layout = None
-                    self.precomputed_kg_engine = None
+            if self.is_cancelled():
+                self.cancelled.emit()
+                return
 
-                self.gap_fill_finished.emit(addendum, new_docs)
+            # Background precomputation of updated layouts using fast heuristics (zero network blocking)
+            updated_report = self.report_markdown + (f"\n\n{addendum}" if addendum else "")
+            try:
+                from ui.graph_viewer import compute_causal_layout_from_markdown
+                self.precomputed_causal_layout = compute_causal_layout_from_markdown(updated_report)
+            except Exception:
+                self.precomputed_causal_layout = None
+            try:
+                from core.knowledge_graph import KnowledgeGraphEngine
+                kg_engine = KnowledgeGraphEngine()
+                all_docs = self.corpus.get_all_documents()
+                if all_docs:
+                    kg_engine.build_from_documents(all_docs, use_llm=False)
+                if updated_report:
+                    kg_engine.extract_from_text(updated_report, cite_id=1, use_llm=False)
+                self.precomputed_kg_layout = kg_engine.compute_layout_data(min_repulsion=120.0)
+                self.precomputed_kg_engine = kg_engine
+            except Exception:
+                self.precomputed_kg_layout = None
+                self.precomputed_kg_engine = None
+
+            self.gap_fill_finished.emit(addendum, new_docs)
         except TaskCancelledError:
             self.cancelled.emit()
         except Exception as exc:

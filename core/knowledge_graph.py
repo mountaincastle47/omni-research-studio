@@ -195,10 +195,14 @@ class KnowledgeGraphEngine:
         text: str,
         cite_id: int = 1,
         model_name: str = DEFAULT_SYNTHESIS_MODEL,
+        use_llm: bool = True,
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """Extract entities and relations using LLM, with deterministic regex fallback."""
         if not text or not text.strip():
             return [], []
+
+        if not use_llm:
+            return self._heuristic_extract(text, cite_id=cite_id)
 
         api_key = self.config_manager.get_api_key()
         if api_key and not is_local_model(model_name):
@@ -215,7 +219,7 @@ class KnowledgeGraphEngine:
                     config=types.GenerateContentConfig(
                         temperature=0.0,
                         response_mime_type="application/json",
-                        http_options=types.HttpOptions(timeout=180000.0),
+                        http_options=types.HttpOptions(timeout=15000.0),
                     ),
                 )
                 raw_json = getattr(response, "text", "") or "{}"
@@ -285,16 +289,16 @@ class KnowledgeGraphEngine:
 
         return entities, relations
 
-    def build_from_documents(self, documents: List[SourceDocument]) -> None:
+    def build_from_documents(self, documents: List[SourceDocument], use_llm: bool = False) -> None:
         """Batch construct knowledge graph from a list of corpus documents."""
         self.clear()
         for doc in documents:
             if getattr(doc, "enabled", True) and doc.content:
-                self.extract_from_text(doc.content, cite_id=getattr(doc, "cite_id", 1))
+                self.extract_from_text(doc.content, cite_id=getattr(doc, "cite_id", 1), use_llm=use_llm)
 
-    def build_from_synthesis(self, report_markdown: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    def build_from_synthesis(self, report_markdown: str, use_llm: bool = False) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """Extract and add entities directly from synthesis report markdown."""
-        return self.extract_from_text(report_markdown, cite_id=1)
+        return self.extract_from_text(report_markdown, cite_id=1, use_llm=use_llm)
 
     def get_nodes_data(self) -> List[Dict[str, Any]]:
         """Return all node metadata for UI rendering."""

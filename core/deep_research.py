@@ -166,23 +166,31 @@ class DeepResearchEngine:
                     continue
 
                 try:
-                    downloaded = trafilatura.fetch_url(link)
-                    if downloaded:
-                        extracted = trafilatura.extract(
-                            downloaded,
-                            include_tables=True,
-                            include_comments=False,
-                            output_format="txt",
-                        )
-                        if extracted and len(extracted.split()) > 60:
-                            results.append({
-                                "title": f"Gap-Fill Evidence: {query[:40]}",
-                                "url": link,
-                                "content": extracted[:6000],
-                            })
-                            scraped_count += 1
-                            if scraped_count >= max_results:
-                                break
+                    req_page = urllib.request.Request(
+                        link,
+                        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+                    )
+                    with urllib.request.urlopen(req_page, timeout=4.0) as page_resp:
+                        raw_page_html = page_resp.read().decode("utf-8", errors="ignore")
+
+                    if self.stop_requested.is_set():
+                        break
+
+                    extracted = trafilatura.extract(
+                        raw_page_html,
+                        include_tables=True,
+                        include_comments=False,
+                        output_format="txt",
+                    )
+                    if extracted and len(extracted.split()) > 60:
+                        results.append({
+                            "title": f"Gap-Fill Evidence: {query[:40]}",
+                            "url": link,
+                            "content": extracted[:6000],
+                        })
+                        scraped_count += 1
+                        if scraped_count >= max_results:
+                            break
                 except Exception as scrape_err:
                     logger.debug(f"Deep scraping error on {link}: {scrape_err}")
 
@@ -337,7 +345,10 @@ class DeepResearchEngine:
             from google import genai
             from google.genai import types
 
-            client = genai.Client(api_key=api_key)
+            client = genai.Client(
+                api_key=api_key,
+                http_options=types.HttpOptions(timeout=60000.0),
+            )
             response = client.models.generate_content(
                 model=self.model_name,
                 contents=prompt,

@@ -1339,17 +1339,34 @@ class MainWindow(QMainWindow):
         self.btn_cancel.setVisible(True)
         self._set_status(initial_status)
 
-        worker.progress_Changed.connect(self._set_status)
-        worker.progress_Detailed.connect(self._on_worker_detailed_progress)
-        worker.chunk_received.connect(self._on_stream_chunk_received)
-        if hasattr(worker, "telemetry_live"):
-            worker.telemetry_live.connect(self._on_live_telemetry_updated)
-        worker.cache_Hit.connect(self._on_worker_cache_hit)
-        worker.cancelled.connect(self._on_worker_cancelled)
-        if hasattr(worker, "task_canceled"):
-            worker.task_canceled.connect(self._on_worker_cancelled)
-        if hasattr(worker, "task_timed_out"):
-            worker.task_timed_out.connect(self._on_worker_timed_out)
+        if worker is not None:
+            if hasattr(worker, "progress_Changed"):
+                worker.progress_Changed.connect(self._set_status)
+            elif hasattr(worker, "progress_changed"):
+                worker.progress_changed.connect(self._set_status)
+            elif hasattr(worker, "status_changed"):
+                worker.status_changed.connect(self._set_status)
+
+            if hasattr(worker, "progress_Detailed"):
+                worker.progress_Detailed.connect(self._on_worker_detailed_progress)
+            elif hasattr(worker, "progress_detailed"):
+                worker.progress_detailed.connect(self._on_worker_detailed_progress)
+
+            if hasattr(worker, "chunk_received"):
+                worker.chunk_received.connect(self._on_stream_chunk_received)
+            if hasattr(worker, "telemetry_live"):
+                worker.telemetry_live.connect(self._on_live_telemetry_updated)
+            if hasattr(worker, "cache_Hit"):
+                worker.cache_Hit.connect(self._on_worker_cache_hit)
+            elif hasattr(worker, "cache_hit"):
+                worker.cache_hit.connect(self._on_worker_cache_hit)
+
+            if hasattr(worker, "cancelled"):
+                worker.cancelled.connect(self._on_worker_cancelled)
+            if hasattr(worker, "task_canceled"):
+                worker.task_canceled.connect(self._on_worker_cancelled)
+            if hasattr(worker, "task_timed_out"):
+                worker.task_timed_out.connect(self._on_worker_timed_out)
 
     _track_worker = _begin_task
 
@@ -1990,21 +2007,27 @@ class MainWindow(QMainWindow):
 
     # --- Phase 11: Sovereign Workflow Handlers ---
 
+    def _get_active_synthesis_model(self) -> str:
+        """Return currently selected synthesis model name with graceful fallback."""
+        if hasattr(self, "synthesis_model_combo"):
+            return self.synthesis_model_combo.currentText()
+        if hasattr(self, "config_manager") and hasattr(self.config_manager, "config"):
+            return getattr(self.config_manager.config, "synthesis_model", DEFAULT_SYNTHESIS_MODEL)
+        return DEFAULT_SYNTHESIS_MODEL
+
     def _trigger_gap_fill(self, report_markdown: str, topic: str) -> None:
         """Trigger autonomous deepening loop to fill empirical gaps."""
-        self._begin_task(None, "Running Recursive Autonomous Gap-Filler (Deepening Loop)...")
         active_model = self._get_active_synthesis_model()
         self._gap_fill_worker = GapFillWorker(
             report_markdown=report_markdown,
             corpus=self.corpus,
-            base_topic=topic or self.query_input.toPlainText().strip(),
+            base_topic=topic or (self.query_input.toPlainText().strip() if hasattr(self, "query_input") else ""),
             lang=self.current_language,
             config_manager=self.config_manager,
             model_name=active_model,
             parent=self,
         )
-        self.active_worker = self._gap_fill_worker
-        self._gap_fill_worker.status_changed.connect(self._set_status)
+        self._begin_task(self._gap_fill_worker, "Running Recursive Autonomous Gap-Filler (Deepening Loop)...")
         self._gap_fill_worker.gap_fill_finished.connect(self._on_gap_fill_finished)
         self._gap_fill_worker.failed_Error.connect(self._on_gap_fill_failed)
         self._gap_fill_worker.start()
