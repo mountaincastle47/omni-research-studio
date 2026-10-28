@@ -95,6 +95,48 @@ def extract_causal_fallback_mermaid(markdown_text: str) -> str:
     return ""
 
 
+MERMAID_CONTROL_TOKENS = {
+    "end",
+    "subgraph",
+    "graph",
+    "flowchart",
+    "classdef",
+    "class",
+    "style",
+    "click",
+    "linkstyle",
+    "direction",
+    "sequencediagram",
+    "statediagram",
+    "classdiagram",
+    "erdiagram",
+    "gantt",
+    "pie",
+    "gitgraph",
+    "journey",
+    "mindmap",
+    "timeline",
+    "tb",
+    "td",
+    "lr",
+    "rl",
+    "bt",
+}
+
+
+def is_valid_mermaid_node(node_id: str, label: str = "") -> bool:
+    """Return True if node_id and label represent valid semantic nodes rather than control tokens."""
+    if not node_id or not node_id.strip():
+        return False
+    clean_id = node_id.strip().lower()
+    clean_lbl = label.strip().lower() if label else ""
+    if clean_id in MERMAID_CONTROL_TOKENS:
+        return False
+    if clean_lbl in MERMAID_CONTROL_TOKENS:
+        return False
+    return True
+
+
 def parse_mermaid_code(code: str) -> ParsedMermaidGraph:
     """Parse graph TD / LR Mermaid diagram definitions into structured nodes and edges."""
     lines = code.strip().splitlines()
@@ -118,7 +160,21 @@ def parse_mermaid_code(code: str) -> ParsedMermaidGraph:
 
     for raw_line in lines:
         line = raw_line.strip()
-        if not line or line.startswith("%%") or line.startswith("graph") or line.startswith("flowchart"):
+        lower_line = line.lower()
+        if (
+            not line
+            or line.startswith("%%")
+            or lower_line.startswith("graph")
+            or lower_line.startswith("flowchart")
+            or lower_line.startswith("subgraph")
+            or lower_line == "end"
+            or lower_line.startswith("classdef")
+            or lower_line.startswith("class ")
+            or lower_line.startswith("style")
+            or lower_line.startswith("click")
+            or lower_line.startswith("linkstyle")
+            or lower_line.startswith("direction")
+        ):
             continue
 
         matched_edge = False
@@ -131,6 +187,9 @@ def parse_mermaid_code(code: str) -> ParsedMermaidGraph:
             edge_label = (g[8] or "").strip()
             tgt_id = g[9].strip()
             tgt_label = next((x.strip() for x in g[10:16] if x is not None), tgt_id) or tgt_id
+
+            if not is_valid_mermaid_node(src_id, src_label) or not is_valid_mermaid_node(tgt_id, tgt_label):
+                continue
 
             if src_id not in graph.nodes:
                 graph.nodes[src_id] = MermaidNode(src_id, src_label)
@@ -157,8 +216,9 @@ def parse_mermaid_code(code: str) -> ParsedMermaidGraph:
                 g = m_node.groups()
                 n_id = g[0].strip()
                 n_lbl = next((x.strip() for x in g[1:7] if x is not None), n_id) or n_id
-                if n_id not in graph.nodes:
-                    graph.nodes[n_id] = MermaidNode(n_id, n_lbl)
+                if is_valid_mermaid_node(n_id, n_lbl):
+                    if n_id not in graph.nodes:
+                        graph.nodes[n_id] = MermaidNode(n_id, n_lbl)
 
     return graph
 

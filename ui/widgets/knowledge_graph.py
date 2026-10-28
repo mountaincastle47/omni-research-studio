@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsLineItem,
+    QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
@@ -129,15 +130,31 @@ class _KGEdgeItem(QGraphicsLineItem):
         self.setPen(QPen(QColor("#334155"), 1.8))
         self.setZValue(1)
 
+        self.badge_bg: Optional[QGraphicsRectItem] = None
         self.label_item: Optional[QGraphicsSimpleTextItem] = None
         if relation:
             mid_x = (x1 + x2) / 2.0
             mid_y = (y1 + y2) / 2.0
             self.label_item = QGraphicsSimpleTextItem(relation, self)
-            self.label_item.setFont(QFont("Consolas", 8))
-            self.label_item.setBrush(QBrush(QColor("#94A3B8")))
-            self.label_item.setPos(mid_x - 15, mid_y - 8)
-            self.label_item.setZValue(2)
+            self.label_item.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+            self.label_item.setBrush(QBrush(QColor("#CBD5E1")))
+            self.label_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            bounds = self.label_item.boundingRect()
+            self.label_item.setPos(mid_x - bounds.width() / 2.0, mid_y - bounds.height() / 2.0)
+            self.label_item.setZValue(3)
+
+            # High-contrast background badge to eliminate line-text collisions
+            badge_rect = QRectF(
+                mid_x - bounds.width() / 2.0 - 5,
+                mid_y - bounds.height() / 2.0 - 2,
+                bounds.width() + 10,
+                bounds.height() + 4,
+            )
+            self.badge_bg = QGraphicsRectItem(badge_rect, self)
+            self.badge_bg.setBrush(QBrush(QColor("#070A10")))
+            self.badge_bg.setPen(QPen(QColor("#334155"), 1.2))
+            self.badge_bg.setZValue(2)
+            self.badge_bg.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
 
 
 class KnowledgeGraphView(QGraphicsView):
@@ -203,6 +220,7 @@ class KnowledgeGraphWidget(QWidget):
         self._node_items: Dict[str, _KGNodeItem] = {}
         self._edge_items: List[_KGEdgeItem] = []
         self._selected_node: Optional[str] = None
+        self._cached_layout_data: Optional[Dict[str, Any]] = None
 
         self._build_ui()
         self._render_graph()
@@ -289,6 +307,27 @@ class KnowledgeGraphWidget(QWidget):
             self._show_empty_placeholder()
             return
 
+        self._cached_layout_data = layout_data
+        # Synchronize entities into self.engine so re-layout preserves them
+        for n in layout_data.get("nodes", []):
+            nid = n.get("id") or n.get("name")
+            if nid and nid not in self.engine.graph:
+                self.engine.add_entity(
+                    name=n.get("name", nid),
+                    category=n.get("category", "Concept"),
+                    description=n.get("description", ""),
+                )
+        for e in layout_data.get("edges", []):
+            src = e.get("source")
+            tgt = e.get("target")
+            if src and tgt:
+                self.engine.add_relation(
+                    source_name=src,
+                    target_name=tgt,
+                    relation=e.get("relation", "connected_to"),
+                    premise=e.get("premise", ""),
+                )
+
         self.scene.clear()
         self._node_items.clear()
         self._edge_items.clear()
@@ -332,17 +371,74 @@ class KnowledgeGraphWidget(QWidget):
         self.auto_layout_fit()
 
     def auto_layout(self) -> None:
-        """Re-cluster coordinates and fit scene to viewport with 50px margins."""
-        layout_data = self.engine.compute_layout_data(min_repulsion=120.0)
-        self.load_precomputed_layout(layout_data)
+        """Re-cluster coordinates and fit scene to viewport without dropping state."""
+        # 1. If self.engine has nodes, compute directly
+        if self.engine and self.engine.graph.number_of_nodes() > 0:
+            layout_data = self.engine.compute_layout_data(min_repulsion=120.0)
+            self.load_precomputed_layout(layout_data)
+            return
+
+        # 2. If cached layout data is available, populate engine and re-cluster
+        if self._cached_layout_data and self._cached_layout_data.get("nodes"):
+            for n in self._cached_layout_data["nodes"]:
+                nid = n.get("id") or n.get("name")
+                if nid:
+                    self.engine.add_entity(
+                        name=n.get("name", nid),
+                        category=n.get("category", "Concept"),
+                        description=n.get("description", ""),
+                    )
+            for e in self._cached_layout_data.get("edges", []):
+                src = e.get("source")
+                tgt = e.get("target")
+                if src and tgt:
+                    self.engine.add_relation(
+                        source_name=src,
+                        target_name=tgt,
+                        relation=e.get("relation", "connected_to"),
+                        premise=e.get("premise", ""),
+                    )
+            layout_data = self.engine.compute_layout_data(min_repulsion=120.0)
+            self.load_precomputed_layout(layout_data)
+            return
+
+        # 3. If scene already has node items, populate engine and re-cluster
+        if self._node_items:
+            for nid, item in self._node_items.items():
+                self.engine.add_entity(
+                    name=item.name,
+                    category=item.category,
+                    description=item.description,
+                )
+            for edge in self._edge_items:
+                self.engine.add_relation(
+                    source_name=edge.source_id,
+                    target_name=edge.target_id,
+                    relation=edge.relation,
+                    premise=edge.premise,
+                )
+            layout_data = self.engine.compute_layout_data(min_repulsion=120.0)
+            self.load_precomputed_layout(layout_data)
+            return
+
+        # 4. If genuinely empty, show placeholder
+        self._show_empty_placeholder()
 
     def auto_layout_fit(self) -> None:
-        """Fit scene to viewport with 50px margins."""
-        self.view.resetTransform()
-        rect = self.scene.itemsBoundingRect().adjusted(-50, -50, 50, 50)
-        if not rect.isEmpty():
+        """Fit scene to viewport with 60px margins and clamp scale to readable 0.85x-1.0x bounds."""
+        rect = self.scene.itemsBoundingRect().adjusted(-60, -60, 60, 60)
+        if rect.isValid() and not rect.isEmpty():
             self.scene.setSceneRect(rect)
+            self.view.resetTransform()
             self.view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+            current_scale = self.view.transform().m11()
+            if current_scale < 0.85:
+                self.view.resetTransform()
+                self.view.scale(0.85, 0.85)
+            elif current_scale > 1.15:
+                self.view.resetTransform()
+                self.view.scale(1.0, 1.0)
+            self.view.centerOn(rect.center())
 
     def load_graph(
         self,

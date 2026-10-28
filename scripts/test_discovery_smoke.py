@@ -271,6 +271,53 @@ def run_smoke_test() -> int:
         main_win._end_task()
         print("   -> Recursive gap-filling worker lifecycle and cooperative cancellation verified.")
 
+        # 10. Verify Graph Token Sanitization & Layout Stability
+        print("[8/8] Verifying Causal token filtering & Knowledge Graph auto-layout stability...")
+        from core.graph_generator import parse_mermaid_code
+        from ui.widgets.knowledge_graph import KnowledgeGraphWidget
+
+        # (a) Causal graph Mermaid parsing must eliminate stray control tokens (e.g. 'end', 'graph', 'subgraph')
+        mermaid_sample = """
+        graph TD
+            subgraph Microservice Cluster
+                A[API Gateway] --> B[Auth Service]
+                B --> C[Postgres DB]
+            end
+            C --> D[Cache Layer]
+        """
+        parsed_g = parse_mermaid_code(mermaid_sample)
+        for nid, nnode in parsed_g.nodes.items():
+            clean_id = nid.strip().lower()
+            clean_label = nnode.label.strip().lower()
+            if clean_id in {"end", "graph", "subgraph", ""} or clean_label in {"end", "graph", "subgraph", ""}:
+                raise RuntimeError(f"Mermaid parser emitted illegal control token as node: id='{nid}', label='{nnode.label}'")
+        print(f"   -> Mermaid control tokens filtered cleanly (Nodes: {list(parsed_g.nodes.keys())})")
+
+        # (b) KnowledgeGraphWidget auto_layout with precomputed layout retains items and finite coordinates
+        kg_widget = KnowledgeGraphWidget()
+        kg_widget.load_precomputed_layout(kg_layout)
+        initial_node_count = len(kg_widget._node_items)
+        if initial_node_count == 0:
+            raise RuntimeError("KnowledgeGraphWidget loaded 0 nodes from kg_layout!")
+
+        # Trigger auto_layout
+        kg_widget.auto_layout()
+        after_layout_count = len(kg_widget._node_items)
+        if after_layout_count != initial_node_count:
+            raise RuntimeError(f"auto_layout wiped or changed node count: {initial_node_count} -> {after_layout_count}")
+
+        # Check finite coordinates
+        import math
+        for nid, item in kg_widget._node_items.items():
+            pos = item.pos()
+            if math.isnan(pos.x()) or math.isnan(pos.y()) or math.isinf(pos.x()) or math.isinf(pos.y()):
+                raise RuntimeError(f"Node {nid} has non-finite coordinates after auto_layout: {pos}")
+
+        scene_rect = kg_widget.scene.itemsBoundingRect()
+        if scene_rect.width() <= 0 or scene_rect.height() <= 0:
+            raise RuntimeError(f"Knowledge Graph scene itemsBoundingRect is not positive: {scene_rect}")
+        print(f"   -> Knowledge Graph auto-layout retained {after_layout_count} nodes with valid scene rect: {scene_rect.width():.1f}x{scene_rect.height():.1f}")
+
         print("\n=======================================================")
         print("  ALL PRE-BUILD SMOKE TESTS PASSED CLEANLY (EXIT 0)    ")
         print("=======================================================")

@@ -383,10 +383,23 @@ class CausalGraphWidget(QWidget):
                 )
                 self.scene.addItem(edge_item)
 
-        rect = self.scene.itemsBoundingRect().adjusted(-50, -50, 50, 50)
-        if not rect.isEmpty():
+        self._fit_and_clamp_viewport()
+
+    def _fit_and_clamp_viewport(self) -> None:
+        """Fit scene to viewport with 60px margins and clamp scale to readable 0.85x-1.0x bounds."""
+        rect = self.scene.itemsBoundingRect().adjusted(-60, -60, 60, 60)
+        if rect.isValid() and not rect.isEmpty():
             self.scene.setSceneRect(rect)
+            self.view.resetTransform()
             self.view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+            current_scale = self.view.transform().m11()
+            if current_scale < 0.85:
+                self.view.resetTransform()
+                self.view.scale(0.85, 0.85)
+            elif current_scale > 1.15:
+                self.view.resetTransform()
+                self.view.scale(1.0, 1.0)
+            self.view.centerOn(rect.center())
 
     def _show_empty_state(self) -> None:
         self.scene.clear()
@@ -504,10 +517,7 @@ class CausalGraphWidget(QWidget):
                 self.scene.addItem(edge_item)
 
         # Update scene bounds and fit into view
-        rect = self.scene.itemsBoundingRect().adjusted(-50, -50, 50, 50)
-        if not rect.isEmpty():
-            self.scene.setSceneRect(rect)
-            self.view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+        self._fit_and_clamp_viewport()
 
     def _on_zoom_in(self) -> None:
         self.view.scale(1.2, 1.2)
@@ -516,11 +526,7 @@ class CausalGraphWidget(QWidget):
         self.view.scale(1.0 / 1.2, 1.0 / 1.2)
 
     def _on_zoom_reset(self) -> None:
-        self.view.resetTransform()
-        rect = self.scene.itemsBoundingRect().adjusted(-50, -50, 50, 50)
-        if not rect.isEmpty():
-            self.scene.setSceneRect(rect)
-            self.view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+        self._fit_and_clamp_viewport()
 
     def _on_anchor_clicked(self, url: QUrl) -> None:
         """Programmatic anchor click handler for backward compatibility."""

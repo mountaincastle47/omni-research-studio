@@ -343,8 +343,12 @@ class WorkspaceReportPane(QWidget):
     def _on_graph_node_selected(self, node_id: str, label: str) -> None:
         self.inner_tabs.setCurrentIndex(0)
         clean = re.sub(r"[#*_`\[\]\(\)]", "", label).strip()
-        if clean:
-            self.synthesis_viewer.find(clean)
+        if clean and len(clean) >= 2 and clean.lower() not in ("end", "subgraph", "graph", "flowchart"):
+            from PyQt6.QtGui import QTextDocument
+            # Prioritize whole-word / exact boundary matching to avoid partial substring hits
+            found = self.synthesis_viewer.find(clean, QTextDocument.FindFlag.FindWholeWords)
+            if not found:
+                self.synthesis_viewer.find(clean)
 
     def update_synthesis_views(
         self,
