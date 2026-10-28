@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import QPointF, QRectF, Qt, QUrl, pyqtSignal
+from PyQt6.QtCore import QPointF, QRect, QRectF, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QBrush,
     QColor,
@@ -132,6 +132,7 @@ class _CausalNodeGraphicsItem(QGraphicsItem):
             | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
             | QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
         )
+        self.setZValue(2.0)  # Rendered at Z=2.0 (above edge lines at Z=1.0)
         self.setAcceptHoverEvents(True)
         self.setToolTip(f"[{node_id}] {self.clean_label}")
 
@@ -211,6 +212,97 @@ class _CausalNodeGraphicsItem(QGraphicsItem):
         super().mousePressEvent(event)
 
 
+class _CausalEdgeBadgeItem(QGraphicsItem):
+    """Opaque pill badge displaying word-wrapped edge relation text above directed edge lines."""
+
+    def __init__(self, edge_item: _CausalEdgeGraphicsItem, relation: str) -> None:
+        super().__init__()
+        self.edge_item = edge_item
+        self.relation = relation.strip()
+        self.is_edge_label = True
+        self.is_edge_badge = True
+        self.setZValue(3.0)  # Rendered strictly above lines (Z=1.0) and node cards (Z=2.0)
+        self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+
+        self.font = QFont("Consolas", 8, QFont.Weight.Bold)
+        self.max_width = 160.0  # Constraint between 140px and 180px
+        self.h_padding = 16.0
+        self.v_padding = 10.0
+        self.width = 60.0
+        self.height = 24.0
+        self.rect = QRectF(0.0, 0.0, self.width, self.height)
+        self._recompute_dimensions()
+
+    def _recompute_dimensions(self) -> None:
+        fm = QFontMetrics(self.font)
+        max_text_w = max(40, int(self.max_width - self.h_padding))
+        flags = int(Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap | Qt.TextFlag.TextWrapAnywhere)
+        text_box = fm.boundingRect(QRect(0, 0, max_text_w, 0), flags, self.relation)
+        self.width = max(50.0, min(self.max_width, float(text_box.width() + self.h_padding)))
+        self.height = max(22.0, float(text_box.height() + self.v_padding))
+        cx = self.rect.center().x() if not self.rect.isNull() else 0.0
+        cy = self.rect.center().y() if not self.rect.isNull() else 0.0
+        self.rect = QRectF(cx - self.width / 2.0, cy - self.height / 2.0, self.width, self.height)
+
+    def update_geometry(self, center_x: float, center_y: float) -> None:
+        """Position badge centered at (center_x, center_y)."""
+        self.prepareGeometryChange()
+        self.rect = QRectF(
+            center_x - self.width / 2.0,
+            center_y - self.height / 2.0,
+            self.width,
+            self.height,
+        )
+        self.update()
+
+    def move_by(self, dx: float, dy: float) -> None:
+        """Translate badge by (dx, dy) for collision avoidance relaxation."""
+        self.prepareGeometryChange()
+        self.rect.translate(dx, dy)
+        self.update()
+
+    def update_text(self, new_relation: str) -> None:
+        """Update badge relation label and recompute wrapped dimensions."""
+        self.prepareGeometryChange()
+        self.relation = new_relation.strip()
+        self._recompute_dimensions()
+        self.update()
+
+    def boundingRect(self) -> QRectF:
+        return self.rect
+
+    def sceneBoundingRect(self) -> QRectF:
+        return self.rect
+
+    def shape(self) -> QPainterPath:
+        path = QPainterPath()
+        path.addRoundedRect(self.rect, 4.0, 4.0)
+        return path
+
+    def paint(self, painter: QPainter, option: Any, widget: Optional[QWidget] = None) -> None:
+        if not self.relation or self.rect.isEmpty():
+            return
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        path = QPainterPath()
+        path.addRoundedRect(self.rect, 4.0, 4.0)
+
+        # 1. Dark opaque background fill matching scene palette
+        painter.fillPath(path, QBrush(QColor("#070A10")))
+        # 2. Subtle slate border
+        painter.strokePath(path, QPen(QColor("#334155"), 1.2))
+
+        # 3. Wrapped label text centered with padding clearance
+        painter.setFont(self.font)
+        painter.setPen(QPen(QColor("#CBD5E1")))
+        inner_rect = self.rect.adjusted(6.0, 4.0, -6.0, -4.0)
+        flags = int(Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap | Qt.TextFlag.TextWrapAnywhere)
+        painter.drawText(inner_rect, flags, self.relation)
+
+
+_CausalEdgeLabelGraphicsItem = _CausalEdgeBadgeItem
+
+
 class _CausalEdgeGraphicsItem(QGraphicsItem):
     """Directed edge arrow connecting source and target causal cards with boundary snapping."""
 
@@ -227,17 +319,45 @@ class _CausalEdgeGraphicsItem(QGraphicsItem):
         self.relation = relation
         self.arrow = arrow
         self.setZValue(1.0)
+        self.badge_fraction: float = 0.50
+        self.badge_item: Optional[_CausalEdgeBadgeItem] = (
+            _CausalEdgeBadgeItem(self, self.relation) if self.relation.strip() else None
+        )
+
+    @property
+    def badge_rect(self) -> QRectF:
+        if self.badge_item:
+            return self.badge_item.boundingRect()
+        return QRectF()
+
+    def get_badge_rect(self) -> QRectF:
+        return self.badge_rect
 
     def update_relation(self, new_relation: str) -> None:
         """Update edge relation badge text and trigger repaint."""
         self.prepareGeometryChange()
         self.relation = new_relation
+        clean_rel = new_relation.strip()
+        if clean_rel:
+            if self.badge_item is None:
+                self.badge_item = _CausalEdgeBadgeItem(self, clean_rel)
+                if self.scene():
+                    self.scene().addItem(self.badge_item)
+            else:
+                self.badge_item.update_text(clean_rel)
+        elif self.badge_item is not None:
+            if self.scene():
+                self.scene().removeItem(self.badge_item)
+            self.badge_item = None
         self.update()
 
     def boundingRect(self) -> QRectF:
         p1 = self.source_item.pos()
         p2 = self.target_item.pos()
-        return QRectF(p1, p2).normalized().adjusted(-50.0, -50.0, 50.0, 50.0)
+        base_rect = QRectF(p1, p2).normalized().adjusted(-30.0, -30.0, 30.0, 30.0)
+        if self.badge_item and not self.badge_item.boundingRect().isEmpty():
+            return base_rect.united(self.badge_item.boundingRect())
+        return base_rect
 
     def paint(self, painter: QPainter, option: Any, widget: Optional[QWidget] = None) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -286,25 +406,6 @@ class _CausalEdgeGraphicsItem(QGraphicsItem):
             ])
             painter.setBrush(QBrush(edge_color))
             painter.drawPolygon(arrow_poly)
-
-        # Draw relation badge at midpoint
-        if self.relation:
-            mid_x = (start_pt.x() + end_pt.x()) / 2.0
-            mid_y = (start_pt.y() + end_pt.y()) / 2.0
-
-            font = QFont("Consolas", 8, QFont.Weight.Bold)
-            painter.setFont(font)
-            fm = QFontMetrics(font)
-            text_width = fm.horizontalAdvance(self.relation)
-            badge_rect = QRectF(mid_x - text_width / 2.0 - 6, mid_y - 10, text_width + 12, 20)
-
-            badge_path = QPainterPath()
-            badge_path.addRoundedRect(badge_rect, 4.0, 4.0)
-            painter.fillPath(badge_path, QBrush(QColor("#070A10")))
-            painter.strokePath(badge_path, QPen(QColor("#334155"), 1.2))
-
-            painter.setPen(QPen(QColor("#94A3B8")))
-            painter.drawText(badge_rect, int(Qt.AlignmentFlag.AlignCenter), self.relation)
 
 
 class CausalGraphView(QGraphicsView):
@@ -462,8 +563,11 @@ class CausalGraphWidget(QWidget):
                     arrow=edge.get("arrow", "-->"),
                 )
                 self.scene.addItem(edge_item)
+                if edge_item.badge_item:
+                    self.scene.addItem(edge_item.badge_item)
                 self._edge_items.append(edge_item)
 
+        self._relayout_edge_badges()
         self._fit_and_clamp_viewport()
 
     def _fit_and_clamp_viewport(self) -> None:
@@ -595,7 +699,7 @@ class CausalGraphWidget(QWidget):
                     cur_y += h + v_sep
                 current_x += layer_w + h_sep
 
-        # Add directed edge items
+        # Add directed edge items and their badge items
         for edge in graph.edges:
             if edge.source_id in self._node_items and edge.target_id in self._node_items:
                 src_item = self._node_items[edge.source_id]
@@ -607,8 +711,11 @@ class CausalGraphWidget(QWidget):
                     arrow=edge.arrow,
                 )
                 self.scene.addItem(edge_item)
+                if edge_item.badge_item:
+                    self.scene.addItem(edge_item.badge_item)
                 self._edge_items.append(edge_item)
 
+        self._relayout_edge_badges()
         # Update scene bounds and fit into view
         self._fit_and_clamp_viewport()
 
@@ -667,6 +774,7 @@ class CausalGraphWidget(QWidget):
                 for edge in self._edge_items:
                     if edge.relation in trans_map:
                         edge.update_relation(trans_map[edge.relation])
+                self._relayout_edge_badges()
             except Exception:
                 pass
             return
@@ -680,6 +788,115 @@ class CausalGraphWidget(QWidget):
             new_rel = label_map.get(edge.relation)
             if new_rel:
                 edge.update_relation(new_rel)
+
+        self._relayout_edge_badges()
+
+    def _relayout_edge_badges(self) -> None:
+        """Compute collision-free, staggered, word-wrapped positions for all edge badges in the scene."""
+        edges_with_badges = [
+            e for e in self._edge_items
+            if e.badge_item is not None and e.relation.strip()
+        ]
+        if not edges_with_badges:
+            return
+
+        # 1. Group outgoing edges by source node to stagger radiating edges
+        from collections import defaultdict
+        source_groups: Dict[Any, List[_CausalEdgeGraphicsItem]] = defaultdict(list)
+        for edge in edges_with_badges:
+            source_groups[edge.source_item].append(edge)
+
+        for src_item, group in source_groups.items():
+            if len(group) == 1:
+                group[0].badge_fraction = 0.50
+            else:
+                # Sort group by target item X position
+                sorted_group = sorted(group, key=lambda e: e.target_item.pos().x())
+                for idx, edge in enumerate(sorted_group):
+                    # Stagger fraction alternately between upper (~0.36) and lower (~0.64)
+                    if idx % 2 == 0:
+                        frac = 0.36 - 0.04 * (idx // 2)
+                    else:
+                        frac = 0.64 + 0.04 * (idx // 2)
+                    edge.badge_fraction = max(0.24, min(0.76, frac))
+
+        # 2. Assign initial coordinates along edge connection vectors
+        for edge in edges_with_badges:
+            p1 = edge.source_item.pos()
+            p2 = edge.target_item.pos()
+            dx = p2.x() - p1.x()
+            dy = p2.y() - p1.y()
+            dist = math.hypot(dx, dy)
+            if dist < 1.0:
+                continue
+
+            start_pt = intersect_card(
+                p1.x(), p1.y(),
+                edge.source_item.width / 2.0, edge.source_item.height / 2.0,
+                dx, dy,
+            )
+            end_pt = intersect_card(
+                p2.x(), p2.y(),
+                edge.target_item.width / 2.0, edge.target_item.height / 2.0,
+                -dx, -dy,
+            )
+
+            t = getattr(edge, "badge_fraction", 0.50)
+            base_x = start_pt.x() + t * (end_pt.x() - start_pt.x())
+            base_y = start_pt.y() + t * (end_pt.y() - start_pt.y())
+            edge.badge_item.update_geometry(base_x, base_y)
+
+        # 3. Collision Avoidance Relaxation Pass (< 20px gap clearance threshold)
+        min_clearance = 20.0
+        max_iterations = 50
+
+        for iteration in range(max_iterations):
+            had_collision = False
+            for i in range(len(edges_with_badges)):
+                badge_a = edges_with_badges[i].badge_item
+                rect_a = badge_a.boundingRect()
+
+                for j in range(i + 1, len(edges_with_badges)):
+                    badge_b = edges_with_badges[j].badge_item
+                    rect_b = badge_b.boundingRect()
+
+                    dx = rect_b.center().x() - rect_a.center().x()
+                    req_dx = (rect_a.width() + rect_b.width()) / 2.0 + min_clearance
+                    ov_x = req_dx - abs(dx)
+
+                    dy = rect_b.center().y() - rect_a.center().y()
+                    req_dy = (rect_a.height() + rect_b.height()) / 2.0 + min_clearance
+                    ov_y = req_dy - abs(dy)
+
+                    # Overlap or clearance violation in both dimensions
+                    if ov_x > 0.0 and ov_y > 0.0:
+                        had_collision = True
+                        if ov_y <= ov_x:
+                            shift_y = ov_y / 2.0 + 1.5
+                            sign_y = 1.0 if dy >= 0.0 else -1.0
+                            badge_a.move_by(0.0, -sign_y * shift_y)
+                            badge_b.move_by(0.0, sign_y * shift_y)
+                        else:
+                            shift_x = ov_x / 2.0 + 1.5
+                            sign_x = 1.0 if dx >= 0.0 else -1.0
+                            badge_a.move_by(-sign_x * shift_x, 0.0)
+                            badge_b.move_by(sign_x * shift_x, 0.0)
+
+            if not had_collision:
+                break
+
+        # 4. Prevent badge collision with node cards
+        for edge in edges_with_badges:
+            badge = edge.badge_item
+            for nid, node_item in self._node_items.items():
+                node_rect = node_item.sceneBoundingRect()
+                b_rect = badge.boundingRect()
+                if b_rect.intersects(node_rect):
+                    diff_y = b_rect.center().y() - node_rect.center().y()
+                    sign = 1.0 if diff_y >= 0.0 else -1.0
+                    shift = node_rect.height() / 2.0 + b_rect.height() / 2.0 + 6.0 - abs(diff_y)
+                    if shift > 0.0:
+                        badge.move_by(0.0, sign * shift)
 
 
 def compute_causal_layout_from_markdown(markdown_text: str) -> Optional[Dict[str, Any]]:

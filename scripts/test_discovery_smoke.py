@@ -736,6 +736,85 @@ def run_smoke_test() -> int:
         print("   -> Transient 504 simulated on initial chunk: recovered with exponential backoff and streamed.")
         print("   -> Translated report assembled and verified in cache for instant language toggling.")
 
+        # 15. Verify Causal Graph Edge Label Collision Avoidance & Dynamic Text Wrapping
+        print("[15/15] Verifying Causal Graph edge label collision avoidance and text wrapping...")
+        from ui.widgets.causal_graph import CausalGraphWidget, _CausalEdgeBadgeItem
+
+        causal_widget = CausalGraphWidget(lang="en")
+        test_causal_mermaid = (
+            "```mermaid\n"
+            "graph TD\n"
+            '    Root["Autonomy Core Failure"] -->|"152mm 2-piece ammo & multi-drum auto-loader mechanism failure"| C1["Hydraulic Lock"]\n'
+            '    Root -->|"Turret-mounted crew & combustible cartridge ignition cascade"| C2["Fire Suppression Stall"]\n'
+            '    Root -->|"Forward-swept wing & carrier flight operation structural overload"| C3["Wing Spar Fatigue"]\n'
+            '    Root -->|"High-voltage bus arc flash and secondary battery disconnect"| C4["Electrical Blackout"]\n'
+            "```"
+        )
+        causal_widget.set_markdown_report(test_causal_mermaid)
+
+        # Collect all edge label items in the scene
+        edge_label_items = [
+            item for item in causal_widget.scene.items()
+            if getattr(item, "is_edge_badge", False) or getattr(item, "is_edge_label", False)
+        ]
+
+        if len(edge_label_items) < 4:
+            raise RuntimeError(f"Expected at least 4 edge label items in scene, found {len(edge_label_items)}")
+
+        # 15.1 Verify Max Width Constraint and Text Wrapping
+        MAX_ALLOWED_WIDTH = 180.0
+        for idx, item in enumerate(edge_label_items):
+            rect = item.boundingRect()
+            if rect.width() > MAX_ALLOWED_WIDTH:
+                raise RuntimeError(
+                    f"Edge label {idx} width ({rect.width():.1f}px) exceeded maximum allowed {MAX_ALLOWED_WIDTH}px!"
+                )
+            if rect.width() < 40.0:
+                raise RuntimeError(f"Edge label {idx} width ({rect.width():.1f}px) is unexpectedly small!")
+
+        # 15.2 Assert no two edge label bounding rectangles intersect
+        for i in range(len(edge_label_items)):
+            rect_a = edge_label_items[i].boundingRect()
+            for j in range(i + 1, len(edge_label_items)):
+                rect_b = edge_label_items[j].boundingRect()
+                if rect_a.intersects(rect_b):
+                    raise RuntimeError(
+                        f"Collision detected between edge label {i} and {j}!\n"
+                        f"  Label A ({edge_label_items[i].relation}): {rect_a}\n"
+                        f"  Label B ({edge_label_items[j].relation}): {rect_b}"
+                    )
+
+        # 15.3 Verify Dynamic Translation of Edge Labels preserves collision-free layout
+        label_map_ko = {
+            "152mm 2-piece ammo & multi-drum auto-loader mechanism failure": "152mm 2피스 탄약 및 다중 드럼 자동장전기 기구 장애",
+            "Turret-mounted crew & combustible cartridge ignition cascade": "포탑 승무원 및 가연성 탄피 발화 연쇄",
+            "Forward-swept wing & carrier flight operation structural overload": "전진익 및 함재기 비행 운용 구조적 과부하",
+            "High-voltage bus arc flash and secondary battery disconnect": "고전압 버스 아크 플래시 및 보조 배터리 차단",
+        }
+        causal_widget.update_language("ko", label_map_ko)
+
+        for idx, item in enumerate(edge_label_items):
+            rect = item.boundingRect()
+            if rect.width() > MAX_ALLOWED_WIDTH:
+                raise RuntimeError(
+                    f"Translated edge label {idx} width ({rect.width():.1f}px) exceeded {MAX_ALLOWED_WIDTH}px!"
+                )
+
+        for i in range(len(edge_label_items)):
+            rect_a = edge_label_items[i].boundingRect()
+            for j in range(i + 1, len(edge_label_items)):
+                rect_b = edge_label_items[j].boundingRect()
+                if rect_a.intersects(rect_b):
+                    raise RuntimeError(
+                        f"Collision detected between translated edge labels {i} and {j}!\n"
+                        f"  Label A ({edge_label_items[i].relation}): {rect_a}\n"
+                        f"  Label B ({edge_label_items[j].relation}): {rect_b}"
+                    )
+
+        print(f"   -> Verified {len(edge_label_items)} edge label badges wrapped within {MAX_ALLOWED_WIDTH}px.")
+        print(f"   -> Verified strictly 0 collisions across radiating edges (all rectA.intersects(rectB) == False).")
+        print("   -> Verified dynamic translation updates and anti-collision recalculation.")
+
         print("\n=======================================================")
         print("  ALL PRE-BUILD SMOKE TESTS PASSED CLEANLY (EXIT 0)    ")
         print("=======================================================")
