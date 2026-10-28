@@ -244,6 +244,12 @@ class WorkspaceReportPane(QWidget):
         self.audio_mp3_path: Optional[str] = None
         self.citations: list = []
         self.grounding_refs: list = []
+        self.causal_graph_data_en: Optional[Dict[str, Any]] = None
+        self.causal_graph_data_ko: Optional[Dict[str, Any]] = None
+        self.causal_label_map_en_to_ko: Dict[str, str] = {}
+        self.causal_label_map_ko_to_en: Dict[str, str] = {}
+        self.kg_label_map_en_to_ko: Dict[str, str] = {}
+        self.kg_label_map_ko_to_en: Dict[str, str] = {}
 
         self._build_ui()
 
@@ -358,6 +364,8 @@ class WorkspaceReportPane(QWidget):
     ) -> None:
         """Update synthesis viewer, causal graph, and chronology views."""
         self.synthesis_original_text = markdown_text
+        if precomputed_causal_layout:
+            self.causal_graph_data_en = precomputed_causal_layout
         self.synthesis_viewer.setHtml(build_dark_html(markdown_text, interactive_citations=True))
         if precomputed_causal_layout and hasattr(self.causal_graph_viewer, "load_precomputed_layout"):
             self.causal_graph_viewer.load_precomputed_layout(precomputed_causal_layout)
@@ -368,6 +376,33 @@ class WorkspaceReportPane(QWidget):
             self.knowledge_graph_viewer.load_precomputed_layout(precomputed_kg_layout)
 
         self.chronology_viewer.set_markdown_report(markdown_text)
+
+    def set_translated_synthesis(self, translated_markdown: str) -> None:
+        """Store translated markdown and build localized graph mappings for dynamic label swapping."""
+        self.synthesis_translated_text = translated_markdown
+        if self.synthesis_original_text and translated_markdown:
+            try:
+                from core.synthesis import build_localized_graph_mappings
+                en_to_ko, ko_to_en = build_localized_graph_mappings(
+                    self.synthesis_original_text,
+                    translated_markdown,
+                )
+                self.causal_label_map_en_to_ko = en_to_ko
+                self.causal_label_map_ko_to_en = ko_to_en
+                self.kg_label_map_en_to_ko = en_to_ko
+                self.kg_label_map_ko_to_en = ko_to_en
+            except Exception:
+                pass
+        self.update_graph_language("ko")
+
+    def update_graph_language(self, lang_code: str) -> None:
+        """Swap labels in both graph viewers without resetting zoom, pan, or node positions."""
+        causal_map = self.causal_label_map_en_to_ko if lang_code == "ko" else self.causal_label_map_ko_to_en
+        kg_map = self.kg_label_map_en_to_ko if lang_code == "ko" else self.kg_label_map_ko_to_en
+        if hasattr(self.causal_graph_viewer, "update_language"):
+            self.causal_graph_viewer.update_language(lang_code, causal_map)
+        if hasattr(self.knowledge_graph_viewer, "update_language"):
+            self.knowledge_graph_viewer.update_language(lang_code, kg_map)
 
     def _on_inner_tab_changed(self, index: int) -> None:
         target = self.synthesis_viewer if index == 0 else self.sweep_report_viewer
@@ -413,6 +448,7 @@ class WorkspaceReportPane(QWidget):
         self.causal_graph_viewer.retranslate_ui(lang)
         self.chronology_viewer.retranslate_ui(lang)
         self.knowledge_graph_viewer.retranslate_ui(lang)
+        self.update_graph_language(lang)
 
     def export_state(self) -> WorkspaceTabState:
         """Export state into WorkspaceTabState."""
@@ -669,7 +705,7 @@ class ResearchWorkspaceTabs(QTabWidget):
         self.split_view_btn = QToolButton(corner_widget)
         self.split_view_btn.setText("◫ " + get_text("menu_split_view", self.current_language))
         self.split_view_btn.setCheckable(True)
-        self.split_view_btn.setToolTip("비교 뷰 활성화 / Split Comparison View")
+        self.split_view_btn.setToolTip(get_text("tooltip_split_view", self.current_language))
         self.split_view_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.split_view_btn.setStyleSheet(
             "QToolButton { font-size: 12px; font-weight: bold; background: #21262d; color: #38bdf8; "
@@ -847,5 +883,6 @@ class ResearchWorkspaceTabs(QTabWidget):
         self.new_tab_btn.setToolTip(get_text("tab_new", lang))
         if hasattr(self, "split_view_btn"):
             self.split_view_btn.setText("◫ " + get_text("menu_split_view", lang))
+            self.split_view_btn.setToolTip(get_text("tooltip_split_view", lang))
         for pane in self.get_all_panes():
             pane.retranslate_ui(lang)

@@ -643,6 +643,64 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "Recommendations:\n• Verify your internet connection.\n• Inspect quota in Google AI Studio.\n• Retry with a refined topic prompt.",
         "ko": "해결 권장사항:\n• 인터넷 연결 상태를 확인하세요.\n• Google AI Studio에서 사용량 및 할당량을 확인하세요.\n• 검색 주제나 프롬프트를 조정한 후 다시 시도하세요.",
     },
+
+    # Action Control Tooltips (Bilingual QToolTip Support)
+    "tooltip_add_files": {
+        "en": "Import local research files (.pdf, .txt, .md) into the active workspace corpus.",
+        "ko": "로컬 연구 문서(.pdf, .txt, .md)를 현재 워크스페이스 코퍼스로 가져옵니다.",
+    },
+    "tooltip_diff_compare": {
+        "en": "Analyze semantic differences and overlapping claims between checked documents.",
+        "ko": "선택한 문서 간 의미적 차이점 및 중복 주장을 비교 분석합니다.",
+    },
+    "tooltip_clear_all": {
+        "en": "Remove all loaded source documents from the current project.",
+        "ko": "현재 프로젝트에서 불러온 모든 소스 문서를 제거합니다.",
+    },
+    "tooltip_run_discovery": {
+        "en": "Execute multi-perspective Google Search grounding across enabled expert lenses.",
+        "ko": "선택된 전문가 관점을 기반으로 다각도 Google 검색 그라운딩을 실행합니다.",
+    },
+    "tooltip_synthesize": {
+        "en": "Generate an epistemically balanced, zero-temperature synthesis citing verified corpus sources.",
+        "ko": "검증된 코퍼스 출처를 인용하여 인식론적으로 균형 잡힌 무작위성 0(Zero-Temperature) 종합 보고서를 생성합니다.",
+    },
+    "tooltip_gap_fill": {
+        "en": "Automatically detect knowledge gaps and execute up to 2 targeted follow-up queries.",
+        "ko": "지식 격차를 자동 탐지하고 최대 2회의 심화 질의를 순환 실행합니다.",
+    },
+    "tooltip_export_report": {
+        "en": "Export the finalized report to Markdown, HTML, or structured JSON.",
+        "ko": "완성된 보고서를 Markdown, HTML 또는 구조화된 JSON으로 내보냅니다.",
+    },
+    "tooltip_split_view": {
+        "en": "Toggle side-by-side workspace comparison between perspectives or iterations.",
+        "ko": "관점 간 또는 반복 작업 결과 간 좌우 분할 비교 뷰를 전환합니다.",
+    },
+    "tooltip_auto_layout": {
+        "en": "Recalculate node cluster coordinates and auto-fit the full graph within view.",
+        "ko": "노드 군집 좌표를 재계산하고 전체 그래프를 뷰포트 크기에 맞춥니다.",
+    },
+    "tooltip_export_svg": {
+        "en": "Export the current directed vector graph as a scalable SVG graphic.",
+        "ko": "현재 방향성 벡터 그래프를 고해상도 SVG 벡터 파일로 내보냅니다.",
+    },
+    "tooltip_zoom_in": {
+        "en": "Zoom graph viewport in or out (Mouse wheel zoom is also supported).",
+        "ko": "그래프 뷰포트를 확대/축소합니다 (마우스 휠 스크롤로도 가능).",
+    },
+    "tooltip_zoom_out": {
+        "en": "Zoom graph viewport in or out (Mouse wheel zoom is also supported).",
+        "ko": "그래프 뷰포트를 확대/축소합니다 (마우스 휠 스크롤로도 가능).",
+    },
+    "tooltip_cancel_task": {
+        "en": "Immediately interrupt active network requests and abort background workers.",
+        "ko": "활성 네트워크 요청을 즉시 중단하고 백그라운드 작업을 안전하게 취소합니다.",
+    },
+    "tooltip_filter_entities": {
+        "en": "Type to filter nodes by entity name or category (Organization, Concept, etc.).",
+        "ko": "엔티티 이름 또는 범주(조직, 개념 등)로 노드를 필터링합니다.",
+    },
 }
 
 import logging

@@ -181,6 +181,26 @@ class _CausalNodeGraphicsItem(QGraphicsItem):
         self.update()
         super().hoverLeaveEvent(event)
 
+    def update_label(self, new_label: str) -> None:
+        """Update node text, recompute dimensions using QFontMetrics, and refresh geometry without moving position."""
+        self.prepareGeometryChange()
+        self.clean_label = sanitize_node_label(new_label) or self.node_id
+        self.label = self.clean_label
+        self.setToolTip(f"[{self.node_id}] {self.clean_label}")
+        min_w = 240.0
+        max_w = 280.0
+        min_h = 72.0
+        from PyQt6.QtCore import QRect
+        fm = QFontMetrics(self.font)
+        text_rect = fm.boundingRect(
+            QRect(0, 0, int(max_w - 24), 0),
+            int(Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap),
+            self.clean_label,
+        )
+        self.width = max(min_w, min(max_w, float(text_rect.width() + 32.0)))
+        self.height = max(min_h, float(text_rect.height() + 28.0))
+        self.update()
+
     def mousePressEvent(self, event: Any) -> None:
         if self.parent_widget:
             self.parent_widget.node_selected.emit(self.node_id, self.label)
@@ -207,6 +227,12 @@ class _CausalEdgeGraphicsItem(QGraphicsItem):
         self.relation = relation
         self.arrow = arrow
         self.setZValue(1.0)
+
+    def update_relation(self, new_relation: str) -> None:
+        """Update edge relation badge text and trigger repaint."""
+        self.prepareGeometryChange()
+        self.relation = new_relation
+        self.update()
 
     def boundingRect(self) -> QRectF:
         p1 = self.source_item.pos()
@@ -327,6 +353,8 @@ class CausalGraphWidget(QWidget):
         self._current_svg: str = ""
         self._raw_mermaid: str = ""
         self._parsed_graph: Optional[ParsedMermaidGraph] = None
+        self._node_items: Dict[str, _CausalNodeGraphicsItem] = {}
+        self._edge_items: List[_CausalEdgeGraphicsItem] = []
 
         self._build_ui()
 
@@ -355,13 +383,13 @@ class CausalGraphWidget(QWidget):
 
         self.btn_zoom_in = QToolButton(self)
         self.btn_zoom_in.setText("➕")
-        self.btn_zoom_in.setToolTip(get_text("zoom_in_graph", self._lang))
+        self.btn_zoom_in.setToolTip(get_text("tooltip_zoom_in", self._lang))
         self.btn_zoom_in.clicked.connect(self._on_zoom_in)
         toolbar.addWidget(self.btn_zoom_in)
 
         self.btn_zoom_out = QToolButton(self)
         self.btn_zoom_out.setText("➖")
-        self.btn_zoom_out.setToolTip(get_text("zoom_out_graph", self._lang))
+        self.btn_zoom_out.setToolTip(get_text("tooltip_zoom_out", self._lang))
         self.btn_zoom_out.clicked.connect(self._on_zoom_out)
         toolbar.addWidget(self.btn_zoom_out)
 
@@ -372,6 +400,7 @@ class CausalGraphWidget(QWidget):
         toolbar.addWidget(self.btn_zoom_reset)
 
         self.btn_export = QPushButton("Export SVG" if self._lang == "en" else "SVG 내보내기", self)
+        self.btn_export.setToolTip(get_text("tooltip_export_svg", self._lang))
         self.btn_export.setStyleSheet(
             "background-color: #1E293B; color: #F1F5F9; border-radius: 4px; padding: 4px 10px; font-size: 11px;"
         )
@@ -406,8 +435,9 @@ class CausalGraphWidget(QWidget):
 
         self._raw_mermaid = layout_data.get("raw_mermaid", "")
         self.scene.clear()
+        self._node_items.clear()
+        self._edge_items.clear()
 
-        node_items: Dict[str, _CausalNodeGraphicsItem] = {}
         for n in layout_data["nodes"]:
             nid = n["id"]
             item = _CausalNodeGraphicsItem(
@@ -418,20 +448,21 @@ class CausalGraphWidget(QWidget):
                 parent_widget=self,
             )
             item.setPos(n.get("x", 0.0), n.get("y", 0.0))
-            node_items[nid] = item
+            self._node_items[nid] = item
             self.scene.addItem(item)
 
         for edge in layout_data.get("edges", []):
             src_id = edge.get("source")
             tgt_id = edge.get("target")
-            if src_id in node_items and tgt_id in node_items:
+            if src_id in self._node_items and tgt_id in self._node_items:
                 edge_item = _CausalEdgeGraphicsItem(
-                    source_item=node_items[src_id],
-                    target_item=node_items[tgt_id],
+                    source_item=self._node_items[src_id],
+                    target_item=self._node_items[tgt_id],
                     relation=edge.get("label", ""),
                     arrow=edge.get("arrow", "-->"),
                 )
                 self.scene.addItem(edge_item)
+                self._edge_items.append(edge_item)
 
         self._fit_and_clamp_viewport()
 
@@ -486,12 +517,13 @@ class CausalGraphWidget(QWidget):
             return
 
         self.scene.clear()
+        self._node_items.clear()
+        self._edge_items.clear()
         graph = self._parsed_graph
 
-        node_items: Dict[str, _CausalNodeGraphicsItem] = {}
         for nid, node in graph.nodes.items():
             item = _CausalNodeGraphicsItem(nid, node.label or nid, parent_widget=self)
-            node_items[nid] = item
+            self._node_items[nid] = item
             self.scene.addItem(item)
 
         # Adjacency and in-degree mapping
@@ -536,38 +568,38 @@ class CausalGraphWidget(QWidget):
             # Top-Down layout: layer by layer with cumulative row height and centered items
             current_y = 0.0
             for layer in layers:
-                layer_h = max((node_items[nid].height for nid in layer), default=72.0)
-                row_widths = [node_items[nid].width for nid in layer]
+                layer_h = max((self._node_items[nid].height for nid in layer), default=72.0)
+                row_widths = [self._node_items[nid].width for nid in layer]
                 total_w = sum(row_widths) + (len(layer) - 1) * h_sep
                 cur_x = -total_w / 2.0
                 for nid in layer:
-                    w = node_items[nid].width
+                    w = self._node_items[nid].width
                     node_x = cur_x + w / 2.0
                     node_y = current_y + layer_h / 2.0
-                    node_items[nid].setPos(round(node_x, 1), round(node_y, 1))
+                    self._node_items[nid].setPos(round(node_x, 1), round(node_y, 1))
                     cur_x += w + h_sep
                 current_y += layer_h + v_sep
         else:
             # Left-to-Right layout: column by column with cumulative column width and centered items
             current_x = 0.0
             for layer in layers:
-                layer_w = max((node_items[nid].width for nid in layer), default=240.0)
-                col_heights = [node_items[nid].height for nid in layer]
+                layer_w = max((self._node_items[nid].width for nid in layer), default=240.0)
+                col_heights = [self._node_items[nid].height for nid in layer]
                 total_h = sum(col_heights) + (len(layer) - 1) * v_sep
                 cur_y = -total_h / 2.0
                 for nid in layer:
-                    h = node_items[nid].height
+                    h = self._node_items[nid].height
                     node_x = current_x + layer_w / 2.0
                     node_y = cur_y + h / 2.0
-                    node_items[nid].setPos(round(node_x, 1), round(node_y, 1))
+                    self._node_items[nid].setPos(round(node_x, 1), round(node_y, 1))
                     cur_y += h + v_sep
                 current_x += layer_w + h_sep
 
         # Add directed edge items
         for edge in graph.edges:
-            if edge.source_id in node_items and edge.target_id in node_items:
-                src_item = node_items[edge.source_id]
-                tgt_item = node_items[edge.target_id]
+            if edge.source_id in self._node_items and edge.target_id in self._node_items:
+                src_item = self._node_items[edge.source_id]
+                tgt_item = self._node_items[edge.target_id]
                 edge_item = _CausalEdgeGraphicsItem(
                     source_item=src_item,
                     target_item=tgt_item,
@@ -575,6 +607,7 @@ class CausalGraphWidget(QWidget):
                     arrow=edge.arrow,
                 )
                 self.scene.addItem(edge_item)
+                self._edge_items.append(edge_item)
 
         # Update scene bounds and fit into view
         self._fit_and_clamp_viewport()
@@ -618,10 +651,35 @@ class CausalGraphWidget(QWidget):
     def retranslate_ui(self, lang: str) -> None:
         self._lang = lang
         self.title_label.setText(get_text("tab_causal_graph", lang))
-        self.btn_zoom_in.setToolTip(get_text("zoom_in_graph", lang))
-        self.btn_zoom_out.setToolTip(get_text("zoom_out_graph", lang))
+        self.btn_zoom_in.setToolTip(get_text("tooltip_zoom_in", lang))
+        self.btn_zoom_out.setToolTip(get_text("tooltip_zoom_out", lang))
         self.btn_zoom_reset.setToolTip(get_text("reset_graph", lang))
         self.btn_export.setText("Export SVG" if lang == "en" else "SVG 내보내기")
+        self.btn_export.setToolTip(get_text("tooltip_export_svg", lang))
+
+    def update_language(self, lang_code: str, label_map: Optional[Dict[str, str]] = None) -> None:
+        """Dynamically update node and edge labels to requested language without moving positions or resetting zoom/pan."""
+        self.retranslate_ui(lang_code)
+        if not label_map:
+            try:
+                from core.synthesis import COMMON_CAUSAL_TRANSLATIONS
+                trans_map = COMMON_CAUSAL_TRANSLATIONS if lang_code == "ko" else {v: k for k, v in COMMON_CAUSAL_TRANSLATIONS.items()}
+                for edge in self._edge_items:
+                    if edge.relation in trans_map:
+                        edge.update_relation(trans_map[edge.relation])
+            except Exception:
+                pass
+            return
+
+        for nid, item in self._node_items.items():
+            new_label = label_map.get(nid) or label_map.get(item.clean_label) or label_map.get(item.label)
+            if new_label:
+                item.update_label(new_label)
+
+        for edge in self._edge_items:
+            new_rel = label_map.get(edge.relation)
+            if new_rel:
+                edge.update_relation(new_rel)
 
 
 def compute_causal_layout_from_markdown(markdown_text: str) -> Optional[Dict[str, Any]]:

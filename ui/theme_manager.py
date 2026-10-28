@@ -381,6 +381,15 @@ QScrollBar::handle:vertical:hover {{
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
     height: 0px;
 }}
+QToolTip {{
+    background-color: #1a1e26;
+    color: #d1d5db;
+    border: 1px solid #3b82f6;
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-size: 11px;
+    font-family: 'Segoe UI', 'Pretendard', sans-serif;
+}}
 """
 
 

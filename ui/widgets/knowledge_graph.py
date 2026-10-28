@@ -90,6 +90,19 @@ class _KGNodeItem(QGraphicsEllipseItem):
         bounds = self.label_item.boundingRect()
         self.label_item.setPos(-bounds.width() / 2.0, radius + 4)
 
+    def update_label(self, new_name: str) -> None:
+        """Update node name and reposition label underneath without changing node coordinates."""
+        self.prepareGeometryChange()
+        self.name = new_name
+        self.entity_name = new_name
+        self.label_item.setText(new_name)
+        bounds = self.label_item.boundingRect()
+        self.label_item.setPos(-bounds.width() / 2.0, self.radius + 4)
+        cite_str = f" | Citations: {', '.join(f'[{c}]' for c in self.citations)}" if self.citations else ""
+        desc_str = f"\n{self.description}" if self.description else ""
+        self.setToolTip(f"[{self.category}] {new_name}{cite_str}{desc_str}")
+        self.update()
+
     def mousePressEvent(self, event: Any) -> None:
         if self.parent_widget:
             self.parent_widget._on_node_clicked(self.node_id)
@@ -155,6 +168,27 @@ class _KGEdgeItem(QGraphicsLineItem):
             self.badge_bg.setPen(QPen(QColor("#334155"), 1.2))
             self.badge_bg.setZValue(2)
             self.badge_bg.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+
+    def update_relation(self, new_relation: str) -> None:
+        """Update relation badge text and reposition badge at midpoint."""
+        self.prepareGeometryChange()
+        self.relation = new_relation
+        if self.label_item and new_relation:
+            self.label_item.setText(new_relation)
+            bounds = self.label_item.boundingRect()
+            line = self.line()
+            mid_x = (line.x1() + line.x2()) / 2.0
+            mid_y = (line.y1() + line.y2()) / 2.0
+            self.label_item.setPos(mid_x - bounds.width() / 2.0, mid_y - bounds.height() / 2.0)
+            if self.badge_bg:
+                badge_rect = QRectF(
+                    mid_x - bounds.width() / 2.0 - 5,
+                    mid_y - bounds.height() / 2.0 - 2,
+                    bounds.width() + 10,
+                    bounds.height() + 4,
+                )
+                self.badge_bg.setRect(badge_rect)
+        self.update()
 
 
 class KnowledgeGraphView(QGraphicsView):
@@ -234,6 +268,7 @@ class KnowledgeGraphWidget(QWidget):
         top_strip = QHBoxLayout()
         self.filter_input = QLineEdit(self)
         self.filter_input.setPlaceholderText(get_text("graph_filter_placeholder", self._lang))
+        self.filter_input.setToolTip(get_text("tooltip_filter_entities", self._lang))
         self.filter_input.setStyleSheet(
             "QLineEdit { background-color: #0F172A; color: #F1F5F9; border: 1px solid #1E293B; "
             "border-radius: 6px; padding: 6px 12px; font-size: 11px; }"
@@ -242,6 +277,7 @@ class KnowledgeGraphWidget(QWidget):
         top_strip.addWidget(self.filter_input, stretch=1)
 
         self.btn_relayout = QPushButton("Auto Layout" if self._lang == "en" else "자동 배치", self)
+        self.btn_relayout.setToolTip(get_text("tooltip_auto_layout", self._lang))
         self.btn_relayout.setStyleSheet(
             "QPushButton { background-color: #1E293B; color: #38BDF8; border: 1px solid #334155; "
             "border-radius: 6px; padding: 6px 12px; font-size: 11px; font-weight: 600; } "
@@ -251,7 +287,7 @@ class KnowledgeGraphWidget(QWidget):
         top_strip.addWidget(self.btn_relayout)
 
         self.btn_zoom_in = QPushButton("➕", self)
-        self.btn_zoom_in.setToolTip(get_text("zoom_in_graph", self._lang))
+        self.btn_zoom_in.setToolTip(get_text("tooltip_zoom_in", self._lang))
         self.btn_zoom_in.setStyleSheet(
             "QPushButton { background-color: #1E293B; color: #F1F5F9; border: 1px solid #334155; "
             "border-radius: 6px; padding: 6px 10px; font-size: 11px; } "
@@ -261,7 +297,7 @@ class KnowledgeGraphWidget(QWidget):
         top_strip.addWidget(self.btn_zoom_in)
 
         self.btn_zoom_out = QPushButton("➖", self)
-        self.btn_zoom_out.setToolTip(get_text("zoom_out_graph", self._lang))
+        self.btn_zoom_out.setToolTip(get_text("tooltip_zoom_out", self._lang))
         self.btn_zoom_out.setStyleSheet(
             "QPushButton { background-color: #1E293B; color: #F1F5F9; border: 1px solid #334155; "
             "border-radius: 6px; padding: 6px 10px; font-size: 11px; } "
@@ -558,4 +594,22 @@ class KnowledgeGraphWidget(QWidget):
     def retranslate_ui(self, lang: str = "en") -> None:
         self._lang = lang
         self.filter_input.setPlaceholderText(get_text("graph_filter_placeholder", lang))
+        self.filter_input.setToolTip(get_text("tooltip_filter_entities", lang))
         self.btn_relayout.setText("Auto Layout" if lang == "en" else "자동 배치")
+        self.btn_relayout.setToolTip(get_text("tooltip_auto_layout", lang))
+        self.btn_zoom_in.setToolTip(get_text("tooltip_zoom_in", lang))
+        self.btn_zoom_out.setToolTip(get_text("tooltip_zoom_out", lang))
+
+    def update_language(self, lang_code: str, label_map: Optional[Dict[str, str]] = None) -> None:
+        """Dynamically update node and edge labels to requested language without moving positions or resetting zoom/pan."""
+        self.retranslate_ui(lang_code)
+        if not label_map:
+            return
+        for nid, node in self._node_items.items():
+            new_label = label_map.get(nid) or label_map.get(node.name) or label_map.get(node.entity_name)
+            if new_label:
+                node.update_label(new_label)
+        for edge in self._edge_items:
+            new_rel = label_map.get(edge.relation)
+            if new_rel:
+                edge.update_relation(new_rel)

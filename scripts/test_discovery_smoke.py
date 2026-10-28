@@ -367,6 +367,82 @@ def run_smoke_test() -> int:
             raise RuntimeError("GapFillWorker failed to precompute causal layout!")
         print("   -> GapFillWorker lifecycle and precomputations verified end-to-end.")
 
+        # 12. Verify Localized Button Tooltips & Dynamic Graph Translation Swapping
+        print("[10/10] Verifying 14 bilingual hover tooltips & dynamic graph translation swapping...")
+        from core.i18n import get_text
+        tooltip_keys = [
+            "tooltip_add_files",
+            "tooltip_diff_compare",
+            "tooltip_clear_all",
+            "tooltip_run_discovery",
+            "tooltip_synthesize",
+            "tooltip_gap_fill",
+            "tooltip_export_report",
+            "tooltip_split_view",
+            "tooltip_auto_layout",
+            "tooltip_export_svg",
+            "tooltip_zoom_in",
+            "tooltip_zoom_out",
+            "tooltip_cancel_task",
+            "tooltip_filter_entities",
+        ]
+        for key in tooltip_keys:
+            en_val = get_text(key, "en")
+            ko_val = get_text(key, "ko")
+            if not en_val or en_val == key:
+                raise RuntimeError(f"Missing English tooltip for {key}: '{en_val}'")
+            if not ko_val or ko_val == key:
+                raise RuntimeError(f"Missing Korean tooltip for {key}: '{ko_val}'")
+        print(f"   -> All {len(tooltip_keys)} tooltips verified non-empty in both English and Korean.")
+
+        # Verify Causal Graph label swapping preserves node positions and viewport
+        pos_before = {nid: (item.pos().x(), item.pos().y()) for nid, item in causal_widget._node_items.items()}
+        causal_widget.update_language(
+            "ko",
+            {
+                "A": "열 충격 과부하 장애 체인",
+                "B": "비상 셧다운 트리거",
+                "triggers": "유발함",
+            },
+        )
+        for nid, item in causal_widget._node_items.items():
+            pos_after = (item.pos().x(), item.pos().y())
+            if pos_before[nid] != pos_after:
+                raise RuntimeError(f"Causal node {nid} moved position during language update: {pos_before[nid]} -> {pos_after}")
+        if causal_widget._node_items["A"].clean_label != "열 충격 과부하 장애 체인":
+            raise RuntimeError(f"Causal node A label was not updated: {causal_widget._node_items['A'].clean_label}")
+        print("   -> Causal graph translation updated node labels with zero coordinate displacement.")
+
+        # Verify Knowledge Graph label swapping preserves node positions
+        first_kg_id = list(kg_widget._node_items.keys())[0]
+        first_kg_item = kg_widget._node_items[first_kg_id]
+        orig_kg_name = first_kg_item.name
+        orig_kg_pos = (first_kg_item.pos().x(), first_kg_item.pos().y())
+        kg_widget.update_language("ko", {first_kg_id: "테스트 개체명"})
+        new_kg_pos = (first_kg_item.pos().x(), first_kg_item.pos().y())
+        if orig_kg_pos != new_kg_pos:
+            raise RuntimeError(f"KG node {first_kg_id} moved position during language update: {orig_kg_pos} -> {new_kg_pos}")
+        if first_kg_item.name != "테스트 개체명":
+            raise RuntimeError(f"KG node label was not updated: {first_kg_item.name}")
+        print("   -> Knowledge graph translation updated entity names with zero coordinate displacement.")
+
+        # Verify WorkspaceReportPane bilateral translation synchronization
+        from ui.workspace_tabs import WorkspaceReportPane
+        pane = WorkspaceReportPane(title="Translation Test Workspace")
+        pane.update_synthesis_views(causal_md_test, precomputed_causal_layout=causal_layout_res)
+        translated_md_test = (
+            "```mermaid\n"
+            "graph TD\n"
+            '    A["원인 장애 체인<br/>열 충격 과응력<br/>연소 불안정 기록<br />기본 노즐 결함 [1]"] -->|촉발| B["2차 긴급 정지<br/>원격 측정 덤프 유발"]\n'
+            "```"
+        )
+        pane.set_translated_synthesis(translated_md_test)
+        if "A" not in pane.causal_label_map_en_to_ko and len(pane.causal_label_map_en_to_ko) == 0:
+            raise RuntimeError("WorkspaceReportPane failed to extract localized label mappings!")
+        pane.update_graph_language("ko")
+        pane.update_graph_language("en")
+        print("   -> WorkspaceReportPane bilateral graph translation pipeline verified cleanly.")
+
         print("\n=======================================================")
         print("  ALL PRE-BUILD SMOKE TESTS PASSED CLEANLY (EXIT 0)    ")
         print("=======================================================")

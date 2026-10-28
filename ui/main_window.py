@@ -1165,6 +1165,9 @@ class MainWindow(QMainWindow):
             elif self.perspective_original_text and self.active_worker is None:
                 self._start_translation(self.perspective_original_text, target_pane="perspective")
 
+        if hasattr(self, "active_workspace_pane") and hasattr(self.active_workspace_pane, "update_graph_language"):
+            self.active_workspace_pane.update_graph_language(self.current_language)
+
     def retranslate_ui(self) -> None:
         """Dynamically update all UI labels, group titles, tabs, buttons, and placeholders in real time."""
         lang = self.current_language
@@ -1185,9 +1188,12 @@ class MainWindow(QMainWindow):
         # Section 1 & Section 2 (Left pane)
         self.corpus_group.setTitle(escape_mnemonic(get_text("sec1_title", lang)))
         self.upload_btn.setText(get_text("btn_add_files", lang))
+        self.upload_btn.setToolTip(get_text("tooltip_add_files", lang))
         if hasattr(self, "btn_diff_compare"):
             self.btn_diff_compare.setText(get_text("menu_diff_compare", lang))
+            self.btn_diff_compare.setToolTip(get_text("tooltip_diff_compare", lang))
         self.clear_corpus_btn.setText(get_text("btn_clear_all", lang))
+        self.clear_corpus_btn.setToolTip(get_text("tooltip_clear_all", lang))
         self.source_list.retranslate_ui(lang)
         self._update_corpus_stats()
         if hasattr(self, "balance_radar"):
@@ -1202,12 +1208,17 @@ class MainWindow(QMainWindow):
         self.discovery_prompt_label.setText(get_text("label_discovery_prompt", lang))
         self.sweep_topic_input.setPlaceholderText(get_text("placeholder_discovery_prompt", lang))
         self.run_sweep_btn.setText(get_text("btn_run_discovery", lang))
+        self.run_sweep_btn.setToolTip(get_text("tooltip_run_discovery", lang))
 
         # Section 3 & Workspace (Center pane)
         self.query_group.setTitle(escape_mnemonic(get_text("sec3_title", lang)))
         self.query_input.setPlaceholderText(get_text("placeholder_synthesis_query", lang))
         self.synthesize_btn.setText(get_text("btn_synthesize", lang))
+        self.synthesize_btn.setToolTip(get_text("tooltip_synthesize", lang))
+        if hasattr(self, "chk_gap_fill"):
+            self.chk_gap_fill.setToolTip(get_text("tooltip_gap_fill", lang))
         self.export_btn.setText(get_text("btn_export_menu", lang))
+        self.export_btn.setToolTip(get_text("tooltip_export_report", lang))
         self.export_md_action.setText(get_text("export_as_md", lang))
         self.export_html_action.setText(get_text("export_as_html", lang))
         self.export_pdf_action.setText(get_text("export_as_pdf", lang))
@@ -1265,6 +1276,7 @@ class MainWindow(QMainWindow):
 
         # Bottom Status Strip
         self.btn_cancel.setText(get_text("btn_cancel", lang))
+        self.btn_cancel.setToolTip(get_text("tooltip_cancel_task", lang))
         if self.active_worker is None:
             self._set_status(get_text("welcome_step1", lang))
 
@@ -1290,6 +1302,9 @@ class MainWindow(QMainWindow):
             elif self.synthesis_original_text and self.config_manager.has_api_key():
                 self._start_translation(self.synthesis_original_text, target_pane="synthesis")
         self.update_toggle_button_label(self.synthesis_toggle_btn, self.synthesis_showing_translation)
+        if hasattr(self, "active_workspace_pane") and hasattr(self.active_workspace_pane, "update_graph_language"):
+            target_lang = "ko" if self.synthesis_showing_translation else "en"
+            self.active_workspace_pane.update_graph_language(target_lang)
 
     def _on_toggle_perspective_language_view(self) -> None:
         """Toggle the OmniSweep Perspective viewer between original and translated buffers."""
@@ -1525,6 +1540,8 @@ class MainWindow(QMainWindow):
             self._set_viewer_markdown(self.synthesis_viewer, translated_text)
             self.synthesis_translation_status.setText("")
             self.update_toggle_button_label(self.synthesis_toggle_btn, self.synthesis_showing_translation)
+            if hasattr(self, "active_workspace_pane") and hasattr(self.active_workspace_pane, "set_translated_synthesis"):
+                self.active_workspace_pane.set_translated_synthesis(translated_text)
         elif target_pane == "perspective":
             self.perspective_is_translating = False
             self.perspective_translated_text = translated_text
