@@ -1716,9 +1716,17 @@ class MainWindow(QMainWindow):
         if target_pane == "synthesis":
             self.synthesis_is_translating = False
             self.synthesis_translation_status.setText("")
+            if not self.synthesis_translated_text and self.synthesis_original_text:
+                self._set_viewer_markdown(self.synthesis_viewer, self.synthesis_original_text)
+                self.synthesis_showing_translation = False
+                self.update_toggle_button_label(self.synthesis_toggle_btn, False)
         else:
             self.perspective_is_translating = False
             self.perspective_translation_status.setText("")
+            if not self.perspective_translated_text and self.perspective_original_text:
+                self._set_viewer_markdown(self.sweep_report_viewer, self.perspective_original_text)
+                self.perspective_showing_translation = False
+                self.update_toggle_button_label(self.perspective_toggle_btn, False)
         self._end_task(reset_progress=True)
         self._set_status(f"Translation warning: {error_message[:120]}")
 

@@ -654,6 +654,88 @@ def run_smoke_test() -> int:
         print(f"   -> Verified 100% non-empty tooltips across {len(buttons_en)} buttons in English.")
         print(f"   -> Verified 100% non-empty tooltips across {len(buttons_ko)} buttons in Korean.")
 
+        # 14. Verify Resilient Translation Pipeline: Chunking, 504 Deadline Exceeded Backoff, and Caching
+        print("[14/14] Verifying Resilient Translation Pipeline: Section chunking, 504 retry, and caching...")
+        from google.genai import errors as genai_errors
+        from core.translator import MarkdownTranslator, split_markdown_into_chunks
+        from core.resilience import is_transient_server_error, is_retryable_error
+
+        # 14.1 Verify error classification for transient errors
+        err_504 = genai_errors.APIError(504, "504 Gateway Timeout: DEADLINE_EXCEEDED")
+        err_503 = genai_errors.APIError(503, "The service is temporarily unavailable")
+        if not is_transient_server_error(err_504) or not is_retryable_error(err_504):
+            raise RuntimeError("504 DEADLINE_EXCEEDED was not classified as a retryable transient error!")
+        if not is_transient_server_error(err_503) or not is_retryable_error(err_503):
+            raise RuntimeError("503 UNAVAILABLE was not classified as a retryable transient error!")
+
+        # 14.2 Verify Markdown chunking on multi-section document
+        test_doc = (
+            "# Large Multi-Section Research Synthesis [1]\n\n"
+            "## 1. System Concurrency Architecture [2]\n"
+            + ("Event loop throughput metrics and task scheduling analysis. " * 35 + "\n\n")
+            + "## 2. Failure Recovery & Fault Tolerance [3]\n"
+            + ("Circuit breakers and cooperative cancellation response latency. " * 35 + "\n\n")
+            + "## 3. Empirical Benchmark Verification [4]\n"
+            + ("Empirical memory allocation traces and token telemetry stats. " * 35 + "\n\n")
+            + "## 4. Synthesis Conclusions\n"
+            + "Final grounded synthesis recommendations."
+        )
+        chunks = split_markdown_into_chunks(test_doc, max_chunk_chars=1800)
+        if len(chunks) < 3:
+            raise RuntimeError(f"Expected document to split into at least 3 chunks, got {len(chunks)}")
+        for idx, c in enumerate(chunks, 1):
+            if len(c) > 2500:
+                raise RuntimeError(f"Chunk {idx} exceeded expected bound with {len(c)} characters")
+
+        # 14.3 Simulate 504 DEADLINE_EXCEEDED with automated backoff recovery
+        class _MockStreamChunk:
+            def __init__(self, text: str) -> None:
+                self.text = text
+
+        class _MockTransientModel:
+            def __init__(self) -> None:
+                self.call_count = 0
+
+            def generate_content_stream(self, model, contents, config):
+                self.call_count += 1
+                if self.call_count == 1:
+                    raise genai_errors.APIError(504, "504 Gateway Timeout: DEADLINE_EXCEEDED")
+                return [_MockStreamChunk("번역: " + contents[:25])]
+
+        class _MockTransientClient:
+            def __init__(self) -> None:
+                self.models = _MockTransientModel()
+
+        mock_client = _MockTransientClient()
+        mock_translator = MarkdownTranslator(client=mock_client)
+
+        streamed_pieces = []
+        recovered_translation = mock_translator.translate_markdown(
+            test_doc,
+            target_lang="ko",
+            chunk_callback=lambda p: streamed_pieces.append(p),
+            max_chunk_chars=1800,
+        )
+
+        if mock_client.models.call_count <= len(chunks):
+            raise RuntimeError("Expected retry call to be dispatched following 504 DEADLINE_EXCEEDED!")
+        if not recovered_translation or len(recovered_translation) < 50:
+            raise RuntimeError("Translation output was unexpectedly empty or truncated following recovery!")
+        if not streamed_pieces:
+            raise RuntimeError("Live token streaming chunk_callback was not invoked during chunked translation!")
+
+        # 14.4 Verify Cache Consistency in active workspace
+        t_hash = main_win.cache_manager.compute_hash(test_doc)
+        main_win.cache_manager.set_translation(t_hash, "ko", recovered_translation)
+        retrieved_cached = main_win.cache_manager.get_translation(t_hash, "ko")
+        if retrieved_cached != recovered_translation:
+            raise RuntimeError("Cached translated report did not match recovered translation!")
+
+        print("   -> 504 DEADLINE_EXCEEDED and 503 UNAVAILABLE classified as retryable transient errors.")
+        print(f"   -> Multi-section document ({len(test_doc)} chars) partitioned into {len(chunks)} bounded sections.")
+        print("   -> Transient 504 simulated on initial chunk: recovered with exponential backoff and streamed.")
+        print("   -> Translated report assembled and verified in cache for instant language toggling.")
+
         print("\n=======================================================")
         print("  ALL PRE-BUILD SMOKE TESTS PASSED CLEANLY (EXIT 0)    ")
         print("=======================================================")

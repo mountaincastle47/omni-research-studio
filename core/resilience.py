@@ -29,13 +29,19 @@ class TaskCancelledError(Exception):
 import httpx
 try:
     import httpcore
-    HTTPCORE_TIMEOUTS = (httpcore.ReadTimeout, httpcore.ConnectTimeout)
+    HTTPCORE_TIMEOUTS = (httpcore.ReadTimeout, httpcore.ConnectTimeout, getattr(httpcore, "RemoteProtocolError", Exception))
 except ImportError:
     HTTPCORE_TIMEOUTS = ()
 
 RETRYABLE_NETWORK_ERRORS = (
     httpx.ReadTimeout,
     httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.RemoteProtocolError,
+    httpx.NetworkError,
+    TimeoutError,
+    ConnectionResetError,
+    ConnectionError,
     *HTTPCORE_TIMEOUTS,
 )
 
@@ -58,11 +64,52 @@ def is_retryable_network_error(exc: BaseException) -> bool:
     if isinstance(exc, RETRYABLE_NETWORK_ERRORS):
         return True
     text = str(exc).lower()
-    return "readtimeout" in text or "connecttimeout" in text or "read timeout" in text or "timed out" in text
+    return any(
+        term in text
+        for term in (
+            "readtimeout",
+            "connecttimeout",
+            "read timeout",
+            "connect timeout",
+            "timed out",
+            "connection reset",
+            "remoteprotocolerror",
+            "remote protocol error",
+        )
+    )
+
+
+def is_transient_server_error(exc: BaseException) -> bool:
+    """Detect whether an exception corresponds to transient HTTP 5xx errors (504 DEADLINE_EXCEEDED, 503 UNAVAILABLE, etc.)."""
+    if isinstance(exc, genai_errors.APIError):
+        code = getattr(exc, "code", None)
+        status = str(getattr(exc, "status", "") or "").upper()
+        message = str(getattr(exc, "message", "") or "").upper()
+        if code in {500, 502, 503, 504}:
+            return True
+        if any(term in status or term in message for term in ("DEADLINE_EXCEEDED", "UNAVAILABLE", "GATEWAY_TIMEOUT", "INTERNAL")):
+            return True
+
+    text = str(exc).upper()
+    return any(
+        term in text
+        for term in (
+            "504",
+            "503",
+            "502",
+            "500",
+            "DEADLINE_EXCEEDED",
+            "DEADLINE EXCEEDED",
+            "UNAVAILABLE",
+            "GATEWAY TIMEOUT",
+            "BAD GATEWAY",
+        )
+    )
 
 
 def is_retryable_error(exc: BaseException) -> bool:
-    return is_rate_limit_error(exc) or is_retryable_network_error(exc)
+    """Return True if exc is a rate-limit, network timeout, or transient 5xx server error."""
+    return is_rate_limit_error(exc) or is_retryable_network_error(exc) or is_transient_server_error(exc)
 
 
 def sleep_with_cancel_check(
@@ -121,8 +168,9 @@ def call_with_exponential_backoff(
 
             is_rate_limit = is_rate_limit_error(exc)
             is_net_timeout = is_retryable_network_error(exc)
+            is_transient = is_transient_server_error(exc)
 
-            if (not is_rate_limit and not is_net_timeout) or attempt >= max_retries:
+            if (not is_rate_limit and not is_net_timeout and not is_transient) or attempt >= max_retries:
                 raise
 
             attempt += 1
@@ -130,15 +178,20 @@ def call_with_exponential_backoff(
             jitter = random.uniform(0.0, min(1.0, base_delay * 0.25))
             wait_seconds = min(max_backoff, base_delay + jitter)
 
-            if is_net_timeout:
-                warn_msg = (
-                    f"Gemini API / HTTP ReadTimeout encountered ({type(exc).__name__}). "
-                    f"Retry attempt {attempt}/{max_retries} with extended 180s headroom in {wait_seconds:.1f}s..."
-                )
-            else:
+            if is_rate_limit:
                 warn_msg = (
                     f"Rate limit (429 RESOURCE_EXHAUSTED) encountered. "
                     f"Retry attempt {attempt}/{max_retries} in {wait_seconds:.1f}s..."
+                )
+            elif is_transient:
+                warn_msg = (
+                    f"Transient gateway/server deadline error ({type(exc).__name__}: {str(exc)[:90]}). "
+                    f"Retry attempt {attempt}/{max_retries} with exponential backoff in {wait_seconds:.1f}s..."
+                )
+            else:
+                warn_msg = (
+                    f"Gemini API / HTTP ReadTimeout encountered ({type(exc).__name__}). "
+                    f"Retry attempt {attempt}/{max_retries} with extended 180s headroom in {wait_seconds:.1f}s..."
                 )
             logger.warning(warn_msg)
             print(f"[WARNING] {warn_msg}", flush=True)
