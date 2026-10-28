@@ -53,6 +53,7 @@ class WorkspaceTabState:
     chat_history: List[Dict[str, str]] = field(default_factory=list)
     citations: List[Dict[str, Any]] = field(default_factory=list)
     grounding_refs: List[Dict[str, Any]] = field(default_factory=list)
+    perspectives: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -73,6 +74,7 @@ class WorkspaceTabState:
             "chat_history": self.chat_history,
             "citations": self.citations,
             "grounding_refs": self.grounding_refs,
+            "perspectives": {k: dict(v) for k, v in self.perspectives.items()},
         }
 
     @classmethod
@@ -95,6 +97,7 @@ class WorkspaceTabState:
             chat_history=[dict(c) for c in data.get("chat_history", []) if isinstance(c, dict)],
             citations=list(data.get("citations", [])),
             grounding_refs=list(data.get("grounding_refs", [])),
+            perspectives={k: dict(v) for k, v in data.get("perspectives", {}).items() if isinstance(v, dict)},
         )
 
 

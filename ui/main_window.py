@@ -1142,6 +1142,12 @@ class MainWindow(QMainWindow):
         self.current_language = "ko" if str(lang_code).startswith("ko") else "en"
         self.retranslate_ui()
 
+        # Preserve scroll positions of text viewers across language swaps
+        s_sb = self.synthesis_viewer.verticalScrollBar()
+        s_scroll = s_sb.value() if s_sb else 0
+        p_sb = self.sweep_report_viewer.verticalScrollBar()
+        p_scroll = p_sb.value() if p_sb else 0
+
         if self.current_language == "en":
             if self.synthesis_original_text:
                 self.synthesis_showing_translation = False
@@ -1152,6 +1158,15 @@ class MainWindow(QMainWindow):
                 self._set_viewer_markdown(self.sweep_report_viewer, self.perspective_original_text)
                 self.update_toggle_button_label(self.perspective_toggle_btn, self.perspective_showing_translation)
         elif self.current_language == "ko":
+            # --- Synthesis Report View ---
+            if not self.synthesis_translated_text and self.synthesis_original_text:
+                synth_hash = self.cache_manager.compute_hash(self.synthesis_original_text)
+                cached_synth = self.cache_manager.get_translation(synth_hash, "ko")
+                if cached_synth:
+                    self.synthesis_translated_text = cached_synth
+                    if hasattr(self.active_workspace_pane, "set_translated_synthesis"):
+                        self.active_workspace_pane.set_translated_synthesis(cached_synth)
+
             if self.synthesis_translated_text:
                 self.synthesis_showing_translation = True
                 self._set_viewer_markdown(self.synthesis_viewer, self.synthesis_translated_text)
@@ -1159,12 +1174,30 @@ class MainWindow(QMainWindow):
             elif self.synthesis_original_text and self.active_worker is None:
                 self._start_translation(self.synthesis_original_text, target_pane="synthesis")
 
+            # --- Perspective Reports View ---
+            if not self.perspective_translated_text and self.perspective_original_text:
+                pane_cached = self.active_workspace_pane.get_perspective_translation("ko") if hasattr(self.active_workspace_pane, "get_perspective_translation") else None
+                if pane_cached:
+                    self.perspective_translated_text = pane_cached
+                else:
+                    persp_hash = self.cache_manager.compute_hash(self.perspective_original_text)
+                    cached_persp = self.cache_manager.get_translation(persp_hash, "ko")
+                    if cached_persp:
+                        self.perspective_translated_text = cached_persp
+                        if hasattr(self.active_workspace_pane, "set_translated_perspective"):
+                            self.active_workspace_pane.set_translated_perspective(cached_persp, "ko")
+
             if self.perspective_translated_text:
                 self.perspective_showing_translation = True
                 self._set_viewer_markdown(self.sweep_report_viewer, self.perspective_translated_text)
                 self.update_toggle_button_label(self.perspective_toggle_btn, self.perspective_showing_translation)
             elif self.perspective_original_text and self.active_worker is None:
                 self._start_translation(self.perspective_original_text, target_pane="perspective")
+
+        if s_sb:
+            s_sb.setValue(s_scroll)
+        if p_sb:
+            p_sb.setValue(p_scroll)
 
         if hasattr(self, "active_workspace_pane") and hasattr(self.active_workspace_pane, "update_graph_language"):
             self.active_workspace_pane.update_graph_language(self.current_language)
@@ -1296,34 +1329,66 @@ class MainWindow(QMainWindow):
 
     def _on_toggle_synthesis_language_view(self) -> None:
         """Toggle the Grounded Synthesis viewer between original and translated buffers."""
+        s_sb = self.synthesis_viewer.verticalScrollBar()
+        s_scroll = s_sb.value() if s_sb else 0
+
         if self.synthesis_showing_translation:
             self.synthesis_showing_translation = False
             if self.synthesis_original_text:
                 self._set_viewer_markdown(self.synthesis_viewer, self.synthesis_original_text)
         else:
+            if not self.synthesis_translated_text and self.synthesis_original_text:
+                synth_hash = self.cache_manager.compute_hash(self.synthesis_original_text)
+                cached_synth = self.cache_manager.get_translation(synth_hash, "ko")
+                if cached_synth:
+                    self.synthesis_translated_text = cached_synth
+                    if hasattr(self.active_workspace_pane, "set_translated_synthesis"):
+                        self.active_workspace_pane.set_translated_synthesis(cached_synth)
+
             if self.synthesis_translated_text:
                 self.synthesis_showing_translation = True
                 self._set_viewer_markdown(self.synthesis_viewer, self.synthesis_translated_text)
             elif self.synthesis_original_text and self.config_manager.has_api_key():
                 self._start_translation(self.synthesis_original_text, target_pane="synthesis")
+
         self.update_toggle_button_label(self.synthesis_toggle_btn, self.synthesis_showing_translation)
         if hasattr(self, "active_workspace_pane") and hasattr(self.active_workspace_pane, "update_graph_language"):
             target_lang = "ko" if self.synthesis_showing_translation else "en"
             self.active_workspace_pane.update_graph_language(target_lang)
+        if s_sb:
+            s_sb.setValue(s_scroll)
 
     def _on_toggle_perspective_language_view(self) -> None:
         """Toggle the OmniSweep Perspective viewer between original and translated buffers."""
+        p_sb = self.sweep_report_viewer.verticalScrollBar()
+        p_scroll = p_sb.value() if p_sb else 0
+
         if self.perspective_showing_translation:
             self.perspective_showing_translation = False
             if self.perspective_original_text:
                 self._set_viewer_markdown(self.sweep_report_viewer, self.perspective_original_text)
         else:
+            if not self.perspective_translated_text and self.perspective_original_text:
+                pane_cached = self.active_workspace_pane.get_perspective_translation("ko") if hasattr(self.active_workspace_pane, "get_perspective_translation") else None
+                if pane_cached:
+                    self.perspective_translated_text = pane_cached
+                else:
+                    persp_hash = self.cache_manager.compute_hash(self.perspective_original_text)
+                    cached_persp = self.cache_manager.get_translation(persp_hash, "ko")
+                    if cached_persp:
+                        self.perspective_translated_text = cached_persp
+                        if hasattr(self.active_workspace_pane, "set_translated_perspective"):
+                            self.active_workspace_pane.set_translated_perspective(cached_persp, "ko")
+
             if self.perspective_translated_text:
                 self.perspective_showing_translation = True
                 self._set_viewer_markdown(self.sweep_report_viewer, self.perspective_translated_text)
             elif self.perspective_original_text and self.config_manager.has_api_key():
                 self._start_translation(self.perspective_original_text, target_pane="perspective")
+
         self.update_toggle_button_label(self.perspective_toggle_btn, self.perspective_showing_translation)
+        if p_sb:
+            p_sb.setValue(p_scroll)
 
     # --- Universal Task Locking, Progress & Cooperative Cancellation ---
 
@@ -1568,6 +1633,25 @@ class MainWindow(QMainWindow):
             self.update_toggle_button_label(self.synthesis_toggle_btn, self.synthesis_showing_translation)
             if hasattr(self, "active_workspace_pane") and hasattr(self.active_workspace_pane, "set_translated_synthesis"):
                 self.active_workspace_pane.set_translated_synthesis(translated_text)
+
+            # Auto-chain perspective translation if language is Korean and perspective report translation is pending
+            if (
+                self.current_language == "ko"
+                and not self.perspective_translated_text
+                and self.perspective_original_text
+                and self.active_worker is None
+            ):
+                persp_hash = self.cache_manager.compute_hash(self.perspective_original_text)
+                cached_persp = self.cache_manager.get_translation(persp_hash, "ko")
+                if cached_persp:
+                    self.perspective_translated_text = cached_persp
+                    self.perspective_showing_translation = True
+                    self._set_viewer_markdown(self.sweep_report_viewer, cached_persp)
+                    self.update_toggle_button_label(self.perspective_toggle_btn, True)
+                    if hasattr(self, "active_workspace_pane") and hasattr(self.active_workspace_pane, "set_translated_perspective"):
+                        self.active_workspace_pane.set_translated_perspective(cached_persp, "ko")
+                elif self.config_manager.has_api_key():
+                    self._start_translation(self.perspective_original_text, target_pane="perspective")
         elif target_pane == "perspective":
             self.perspective_is_translating = False
             self.perspective_translated_text = translated_text
@@ -1575,6 +1659,8 @@ class MainWindow(QMainWindow):
             self._set_viewer_markdown(self.sweep_report_viewer, translated_text)
             self.perspective_translation_status.setText("")
             self.update_toggle_button_label(self.perspective_toggle_btn, self.perspective_showing_translation)
+            if hasattr(self, "active_workspace_pane") and hasattr(self.active_workspace_pane, "set_translated_perspective"):
+                self.active_workspace_pane.set_translated_perspective(translated_text, "ko")
 
         if was_cache_hit:
             self._set_status(get_text("status_cache_hit", self.current_language))
@@ -1891,7 +1977,44 @@ class MainWindow(QMainWindow):
         self.perspective_translation_status.setText("")
         self.update_toggle_button_label(self.perspective_toggle_btn, self.perspective_showing_translation)
 
-        self._set_viewer_markdown(self.sweep_report_viewer, combined_sweep_md)
+        # Build structured per-perspective cache
+        perspectives_dict: Dict[str, Dict[str, Any]] = {}
+        for i, report in enumerate(result.perspective_reports):
+            p_id = report.perspective_id or f"persp_{i+1}"
+            perspectives_dict[p_id] = {
+                "id": p_id,
+                "name": report.perspective_name,
+                "role": report.perspective_role,
+                "content_en": report.analysis_markdown,
+                "content_ko": "",
+            }
+        perspectives_dict["_combined"] = {
+            "id": "_combined",
+            "name": "Combined Perspectives",
+            "content_en": combined_sweep_md,
+            "content_ko": "",
+        }
+        if hasattr(self, "active_workspace_pane") and hasattr(self.active_workspace_pane, "set_perspectives_data"):
+            self.active_workspace_pane.set_perspectives_data(perspectives_dict)
+
+        # Check if pre-cached in cache_manager
+        persp_hash = self.cache_manager.compute_hash(combined_sweep_md)
+        cached_ko = self.cache_manager.get_translation(persp_hash, "ko")
+        if cached_ko:
+            self.perspective_translated_text = cached_ko
+            if hasattr(self, "active_workspace_pane") and hasattr(self.active_workspace_pane, "set_translated_perspective"):
+                self.active_workspace_pane.set_translated_perspective(cached_ko, "ko")
+
+        if self.current_language == "ko":
+            if cached_ko:
+                self.perspective_showing_translation = True
+                self._set_viewer_markdown(self.sweep_report_viewer, cached_ko)
+                self.update_toggle_button_label(self.perspective_toggle_btn, True)
+            else:
+                self._set_viewer_markdown(self.sweep_report_viewer, combined_sweep_md)
+                self._start_translation(combined_sweep_md, target_pane="perspective")
+        else:
+            self._set_viewer_markdown(self.sweep_report_viewer, combined_sweep_md)
         self.center_tabs.setCurrentIndex(1)
 
         self.citation_inspector.update_grounding_and_citations(
@@ -1913,9 +2036,6 @@ class MainWindow(QMainWindow):
                 f"OmniSweep Discovery complete: added {len(result.perspective_reports)} perspective reports "
                 f"and {len(result.all_grounding_references)} grounded web sources."
             )
-
-        if self.current_language == "ko":
-            self._start_translation(combined_sweep_md, target_pane="perspective")
 
     # --- Grounded Synthesis Execution ---
 

@@ -503,6 +503,133 @@ def run_smoke_test() -> int:
             raise RuntimeError("Cancel button was expected to be hidden in Idle state!")
         print("   -> Cancel Button state machine verified across Running -> Cancelling -> Idle without bilingual leaks.")
 
+        # 12. Verify OmniSweep Perspective Reports persistent translation caching & instant toggle
+        print("[12/12] Verifying OmniSweep Perspective Reports persistent translation caching & instant toggle...")
+        test_persp_en = (
+            "# OmniSweep Multi-Perspective Discovery: Asyncio\n\n"
+            "---\n## [1] Systems & Technical Architect `[CORE ARCHITECTURE]`\n"
+            "**Role Mandate:** *Examine event loop and coroutines*\n\n"
+            "Python asyncio implements cooperative multitasking via an event loop and epoll syscalls.\n"
+        )
+        test_persp_ko = (
+            "# OmniSweep 다중 관점 탐색: Asyncio\n\n"
+            "---\n## [1] 시스템 및 기술 아키텍트 `[핵심 아키텍처]`\n"
+            "**역할 위임:** *이벤트 루프 및 코루틴 검토*\n\n"
+            "파이썬 asyncio는 이벤트 루프 및 epoll 시스템 콜을 통해 협조적 멀티태스킹을 구현합니다.\n"
+        )
+        test_synth_en = (
+            "# Grounded Synthesis Report\n\n"
+            "Asyncio allows high-concurrency I/O bound execution without OS thread context-switch overhead."
+        )
+        test_synth_ko = (
+            "# 근거 기반 종합 보고서\n\n"
+            "Asyncio는 OS 스레드 컨텍스트 전환 오버헤드 없이 고동시성 I/O 바운드 실행을 가능하게 합니다."
+        )
+
+        main_win.perspective_original_text = test_persp_en
+        main_win.perspective_translated_text = ""
+        main_win.perspective_showing_translation = False
+        main_win.synthesis_original_text = test_synth_en
+        main_win.synthesis_translated_text = test_synth_ko
+        main_win.synthesis_showing_translation = False
+
+        # Populate structured perspectives data
+        perspectives_dict = {
+            "architect": {
+                "id": "architect",
+                "name": "Systems & Technical Architect",
+                "role": "Examine event loop and coroutines",
+                "content_en": "Python asyncio implements cooperative multitasking via an event loop and epoll syscalls.",
+                "content_ko": "",
+            },
+            "_combined": {
+                "id": "_combined",
+                "name": "Combined Perspectives",
+                "content_en": test_persp_en,
+                "content_ko": "",
+            },
+        }
+        main_win.active_workspace_pane.set_perspectives_data(perspectives_dict)
+        main_win.active_workspace_pane.causal_label_map_en_to_ko = {"A": "원인 장애 체인"}
+        main_win.active_workspace_pane.kg_label_map_en_to_ko = {"Python": "파이썬"}
+
+        # Pre-seed cache_manager with translation for test_persp_en
+        p_hash = main_win.cache_manager.compute_hash(test_persp_en)
+        main_win.cache_manager.set_translation(p_hash, "ko", test_persp_ko)
+
+        # Pre-seed synthesis translation in cache_manager as well
+        s_hash = main_win.cache_manager.compute_hash(test_synth_en)
+        main_win.cache_manager.set_translation(s_hash, "ko", test_synth_ko)
+
+        # Track any worker thread dispatches
+        dispatched_workers = []
+        original_start_trans = main_win._start_translation
+        def _mock_start_trans(md_text, target_pane):
+            dispatched_workers.append(target_pane)
+            return original_start_trans(md_text, target_pane)
+        main_win._start_translation = _mock_start_trans
+
+        # Checkbox states tracking
+        initial_checked = [cb.isChecked() for cb, _ in main_win.perspective_selector._checkboxes]
+
+        # Step 1: Switch to Korean ("ko")
+        ko_idx = 1 if main_win.language_combo.itemData(1) == "ko" else 0
+        main_win.language_combo.setCurrentIndex(ko_idx)
+
+        if not main_win.perspective_showing_translation:
+            raise RuntimeError("Perspective report was expected to show translation after switching to Korean!")
+        if main_win.perspective_translated_text != test_persp_ko:
+            raise RuntimeError("Perspective translated text did not match cached Korean content!")
+        if main_win.active_workspace_pane.get_perspective_translation("ko") != test_persp_ko:
+            raise RuntimeError("WorkspaceReportPane get_perspective_translation('ko') did not return cached Korean content!")
+        if main_win.active_workspace_pane.perspectives["architect"]["content_ko"] == "":
+            raise RuntimeError("Per-perspective architect content_ko was not populated!")
+        if len(dispatched_workers) > 0:
+            raise RuntimeError(f"Expected 0 worker dispatches on cache hit, but dispatched: {dispatched_workers}")
+
+        # Step 2: Switch back to English ("en")
+        en_idx = 0 if main_win.language_combo.itemData(0) == "en" else 1
+        main_win.language_combo.setCurrentIndex(en_idx)
+
+        if main_win.perspective_showing_translation:
+            raise RuntimeError("Perspective report was expected to show original after switching to English!")
+        if main_win.sweep_report_viewer.toPlainText() == "":
+            raise RuntimeError("Perspective viewer was unexpectedly empty after switching to English!")
+
+        # Step 3: Switch back to Korean ("ko") a second time
+        dispatched_workers.clear()
+        main_win.language_combo.setCurrentIndex(ko_idx)
+
+        if not main_win.perspective_showing_translation:
+            raise RuntimeError("Perspective report was expected to show translation on second Korean toggle!")
+        if main_win.perspective_translated_text != test_persp_ko:
+            raise RuntimeError("Perspective translated text did not match cached Korean content on second toggle!")
+        if len(dispatched_workers) != 0:
+            raise RuntimeError(f"Expected strictly 0 API/worker calls on second toggle, but got: {len(dispatched_workers)}")
+
+        # Step 4: Verify Grounded Synthesis Report, Causal Graph, and Knowledge Graph retain cached states
+        if not main_win.synthesis_showing_translation:
+            raise RuntimeError("Grounded synthesis report lost its translation showing state!")
+        if main_win.synthesis_translated_text != test_synth_ko:
+            raise RuntimeError("Grounded synthesis report lost its cached translation text!")
+
+        # Verify Causal & Knowledge Graph localized label maps retained
+        if not main_win.active_workspace_pane.causal_label_map_en_to_ko:
+            raise RuntimeError("Causal graph label mapping was lost!")
+        if not main_win.active_workspace_pane.kg_label_map_en_to_ko:
+            raise RuntimeError("Knowledge graph label mapping was lost!")
+
+        # Verify checkbox states maintained
+        after_checked = [cb.isChecked() for cb, _ in main_win.perspective_selector._checkboxes]
+        if initial_checked != after_checked:
+            raise RuntimeError("Perspective checkbox states were altered during language toggling!")
+
+        # Restore original _start_translation
+        main_win._start_translation = original_start_trans
+        print("   -> Toggling to Korean cached perspective report and populated per-perspective content_ko.")
+        print("   -> Toggling to English and back to Korean read from cache with 0 API/worker dispatches.")
+        print("   -> Grounded Synthesis, Causal Graph, Knowledge Graph, and checkbox states preserved.")
+
         print("\n=======================================================")
         print("  ALL PRE-BUILD SMOKE TESTS PASSED CLEANLY (EXIT 0)    ")
         print("=======================================================")

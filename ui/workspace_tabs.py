@@ -238,6 +238,7 @@ class WorkspaceReportPane(QWidget):
         self.perspective_original_text: str = ""
         self.perspective_translated_text: str = ""
         self.perspective_showing_translation: bool = False
+        self.perspectives: Dict[str, Dict[str, Any]] = {}
         self.audio_directive: str = ""
         self.audio_script: str = ""
         self.audio_title: str = ""
@@ -395,6 +396,79 @@ class WorkspaceReportPane(QWidget):
                 pass
         self.update_graph_language("ko")
 
+    def set_perspectives_data(self, perspectives_data: Dict[str, Dict[str, Any]]) -> None:
+        """Store structured per-perspective data containing English and translated content."""
+        self.perspectives = dict(perspectives_data)
+
+    def set_translated_perspective(self, translated_markdown: str, lang: str = "ko") -> None:
+        """Store translated perspective markdown and update per-perspective cache."""
+        self.perspective_translated_text = translated_markdown
+        if "_combined" not in self.perspectives:
+            self.perspectives["_combined"] = {
+                "id": "_combined",
+                "name": "Combined Perspectives",
+                "content_en": self.perspective_original_text,
+                f"content_{lang}": translated_markdown,
+            }
+        else:
+            self.perspectives["_combined"][f"content_{lang}"] = translated_markdown
+        self._update_per_perspective_translations(translated_markdown, lang=lang)
+
+    def _update_per_perspective_translations(self, translated_markdown: str, lang: str = "ko") -> None:
+        """Parse translated sections and cache under each perspective ID."""
+        if not self.perspectives or not translated_markdown:
+            return
+
+        from core.i18n import get_text
+        from ui.components import PERSONA_I18N_KEY_MAP
+
+        parts = [p.strip() for p in re.split(r"(?m)^---\s*\n(?=##\s+)", translated_markdown) if p.strip()]
+        section_parts = [p for p in parts if p.startswith("##")]
+        if not section_parts:
+            raw_parts = [s.strip() for s in re.split(r"(?m)^(?=##\s+)", translated_markdown) if s.strip()]
+            section_parts = [s for s in raw_parts if s.startswith("##")]
+
+        non_combined = [k for k in self.perspectives.keys() if k != "_combined"]
+        matched_indices = set()
+
+        for p_id in non_combined:
+            p_info = self.perspectives[p_id]
+            p_name = p_info.get("name", "")
+            i18n_key = PERSONA_I18N_KEY_MAP.get(p_id, "")
+            localized_name = get_text(i18n_key, lang) if i18n_key else ""
+
+            for idx, part in enumerate(section_parts):
+                part_lower = part.lower()
+                if (
+                    (p_name and p_name.lower() in part_lower)
+                    or (localized_name and localized_name.lower() in part_lower)
+                    or (p_id and p_id.lower() in part_lower)
+                    or (f"[{p_id}]".lower() in part_lower)
+                ):
+                    p_info[f"content_{lang}"] = part
+                    matched_indices.add(idx)
+                    break
+
+        unmatched_pids = [p_id for p_id in non_combined if not self.perspectives[p_id].get(f"content_{lang}")]
+        unmatched_sections = [s for idx, s in enumerate(section_parts) if idx not in matched_indices]
+        for p_id, section in zip(unmatched_pids, unmatched_sections):
+            self.perspectives[p_id][f"content_{lang}"] = section
+
+    def get_perspective_translation(self, lang: str = "ko", p_id: Optional[str] = None) -> Optional[str]:
+        """Retrieve cached translation for a specific perspective or combined report."""
+        if p_id and p_id in self.perspectives:
+            key = f"content_{lang}"
+            val = self.perspectives[p_id].get(key)
+            if val:
+                return val
+        if lang == "ko" and self.perspective_translated_text:
+            return self.perspective_translated_text
+        if lang == "en" and self.perspective_original_text:
+            return self.perspective_original_text
+        if "_combined" in self.perspectives:
+            return self.perspectives["_combined"].get(f"content_{lang}")
+        return None
+
     def update_graph_language(self, lang_code: str) -> None:
         """Swap labels in both graph viewers without resetting zoom, pan, or node positions."""
         causal_map = self.causal_label_map_en_to_ko if lang_code == "ko" else self.causal_label_map_ko_to_en
@@ -470,6 +544,7 @@ class WorkspaceReportPane(QWidget):
             chat_history=self.chat_drawer.history(),
             citations=list(self.citations),
             grounding_refs=list(self.grounding_refs),
+            perspectives={k: dict(v) for k, v in self.perspectives.items()},
         )
 
     def import_state(self, state: WorkspaceTabState) -> None:
@@ -484,6 +559,7 @@ class WorkspaceReportPane(QWidget):
         self.perspective_original_text = state.perspective_original
         self.perspective_translated_text = state.perspective_translated
         self.perspective_showing_translation = state.perspective_showing_translation
+        self.perspectives = {k: dict(v) for k, v in getattr(state, "perspectives", {}).items()}
         self.audio_directive = state.audio_directive
         self.audio_script = state.audio_script_raw
         self.audio_title = state.audio_title
@@ -839,6 +915,7 @@ class ResearchWorkspaceTabs(QTabWidget):
             pane.perspective_original_text = ""
             pane.perspective_translated_text = ""
             pane.perspective_showing_translation = False
+            pane.perspectives = {}
             pane.audio_directive = ""
             pane.audio_script = ""
             pane.chat_drawer.clear_chat(emit_signal=False)
