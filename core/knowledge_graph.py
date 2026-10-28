@@ -28,6 +28,83 @@ ENTITY_CATEGORIES = {
     "Concept": "#94A3B8",          # Slate
 }
 
+# Standard bilingual technical relation vocabulary
+KG_RELATION_TRANSLATIONS: Dict[str, str] = {
+    "associated_with": "연관됨",
+    "associated with": "연관됨",
+    "identifies": "식별함",
+    "identified_by": "식별됨",
+    "precedes": "선행함",
+    "causes": "원인임",
+    "caused_by": "유발됨",
+    "leads": "이끔",
+    "leads_to": "초래함",
+    "leads to": "초래함",
+    "depends_on": "의존함",
+    "depends on": "의존함",
+    "defines": "정의함",
+    "defined_by": "정의됨",
+    "implements": "구현함",
+    "implemented_by": "구현됨",
+    "synthesizes": "종합함",
+    "synthesizes_the": "종합함",
+    "synthesizes the": "종합함",
+    "enables": "가능하게 함",
+    "requires": "필요로 함",
+    "required_by": "요구됨",
+    "triggers": "유발함",
+    "triggered_by": "촉발됨",
+    "validates": "검증함",
+    "validated_by": "검증됨",
+    "correlates_with": "상관관계 있음",
+    "correlates with": "상관관계 있음",
+    "regulates": "규제/조절함",
+    "regulated_by": "규제됨",
+    "influences": "영향을 미침",
+    "influenced_by": "영향 받음",
+    "connected_to": "연결됨",
+    "connected to": "연결됨",
+    "constrains": "제약함",
+    "constrained_by": "제약됨",
+    "inhibits": "억제함",
+    "accelerates": "가속화함",
+    "produces": "생성함",
+    "produced_by": "생성됨",
+    "derived_from": "유래됨",
+    "part_of": "일부임",
+    "part of": "일부임",
+    "contains": "포함함",
+    "contained_in": "포함됨",
+    "subclass_of": "하위 분류임",
+    "instance_of": "인스턴스임",
+    "monitors": "모니터링함",
+    "mitigates": "완화함",
+    "escalates": "악화시킴",
+    "results_in": "결과로 이어짐",
+    "competes_with": "경쟁함",
+    "supports": "지원함",
+    "supported_by": "지원받음",
+    "replaces": "대체함",
+    "improves": "개선함",
+    "degrades": "저하시킴",
+    "related_to": "관련됨",
+    "related to": "관련됨",
+}
+
+KG_RELATION_REVERSE: Dict[str, str] = {v: k for k, v in KG_RELATION_TRANSLATIONS.items()}
+
+
+def localize_kg_relation(relation: str, lang: str = "en") -> str:
+    """Return localized relation label (e.g. Korean for 'ko', English for 'en')."""
+    if not relation:
+        return ""
+    clean = relation.strip()
+    norm_key = clean.lower().replace("-", "_")
+    if lang == "ko":
+        return KG_RELATION_TRANSLATIONS.get(norm_key) or KG_RELATION_TRANSLATIONS.get(clean.lower()) or clean.replace("_", " ")
+    else:
+        return KG_RELATION_REVERSE.get(clean) or clean.replace("_", " ")
+
 ENTITY_EXTRACTION_PROMPT = """You are an Expert Technical Knowledge Graph Extractor.
 Extract the key technical entities and their explicit relationships from the document excerpt below.
 Categorize each entity strictly into one of:
@@ -456,5 +533,15 @@ class KnowledgeGraphEngine:
                 })
 
         return {"nodes": out_nodes, "edges": out_edges}
+
+
+__all__ = [
+    "ENTITY_CATEGORIES",
+    "KG_RELATION_TRANSLATIONS",
+    "KG_RELATION_REVERSE",
+    "KnowledgeGraphEngine",
+    "localize_kg_relation",
+    "clean_and_parse_json",
+]
 
 

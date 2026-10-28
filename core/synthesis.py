@@ -112,6 +112,28 @@ def build_localized_graph_mappings(
     en_to_ko: Dict[str, str] = dict(COMMON_CAUSAL_TRANSLATIONS)
     ko_to_en: Dict[str, str] = {v: k for k, v in COMMON_CAUSAL_TRANSLATIONS.items()}
 
+    try:
+        from core.knowledge_graph import KG_RELATION_TRANSLATIONS
+        en_to_ko.update(KG_RELATION_TRANSLATIONS)
+        for k, v in KG_RELATION_TRANSLATIONS.items():
+            ko_to_en[v] = k
+    except Exception:
+        pass
+
+    import re
+    # Extract paired bold entities **Term** between original and translated markdown
+    o_bolds = re.findall(r"\*\*([A-Za-z0-9\s_-]{3,40})\*\*", original_markdown or "")
+    t_bolds = re.findall(r"\*\*([^\*\n]{3,40})\*\*", translated_markdown or "")
+    if len(o_bolds) == len(t_bolds) and o_bolds:
+        for ob, tb in zip(o_bolds, t_bolds):
+            ob_clean = ob.strip()
+            tb_clean = tb.strip()
+            if ob_clean and tb_clean:
+                en_to_ko[ob_clean] = tb_clean
+                en_to_ko[ob_clean.lower()] = tb_clean
+                ko_to_en[tb_clean] = ob_clean
+                ko_to_en[tb_clean.lower()] = ob_clean
+
     from core.graph_generator import extract_mermaid_blocks, parse_mermaid_code
     orig_blocks = extract_mermaid_blocks(original_markdown or "")
     trans_blocks = extract_mermaid_blocks(translated_markdown or "")

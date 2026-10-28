@@ -225,6 +225,10 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "Cancel Task",
         "ko": "작업 취소",
     },
+    "btn_cancelling": {
+        "en": "Cancelling...",
+        "ko": "취소 중...",
+    },
     "status_canceling": {
         "en": "Canceling active task...",
         "ko": "작업 취소 중...",

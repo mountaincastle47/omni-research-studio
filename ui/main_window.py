@@ -794,6 +794,7 @@ class MainWindow(QMainWindow):
         self.btn_cancel = QPushButton(get_text("btn_cancel", self.current_language))
         self.btn_cancel.setObjectName("CancelTaskBtn")
         self.btn_cancel.setFixedWidth(90)
+        self.btn_cancel.setEnabled(False)
         self.btn_cancel.setVisible(False)
         self.btn_cancel.clicked.connect(self.on_cancel_requested)
 
@@ -1275,8 +1276,12 @@ class MainWindow(QMainWindow):
             self.offline_label.setText(get_text("network_offline_banner", lang))
 
         # Bottom Status Strip
-        self.btn_cancel.setText(get_text("btn_cancel", lang))
-        self.btn_cancel.setToolTip(get_text("tooltip_cancel_task", lang))
+        if hasattr(self, "btn_cancel"):
+            if self.btn_cancel.isVisible() and not self.btn_cancel.isEnabled():
+                self.btn_cancel.setText(get_text("btn_cancelling", lang))
+            else:
+                self.btn_cancel.setText(get_text("btn_cancel", lang))
+            self.btn_cancel.setToolTip(get_text("tooltip_cancel_task", lang))
         if self.active_worker is None:
             self._set_status(get_text("welcome_step1", lang))
 
@@ -1350,8 +1355,7 @@ class MainWindow(QMainWindow):
 
         self.progress_bar.setValue(0)
         self._update_eta_display(0, is_ready=False)
-        self.btn_cancel.setEnabled(True)
-        self.btn_cancel.setVisible(True)
+        self._set_cancel_state("running")
         self._set_status(initial_status)
 
         if worker is not None:
@@ -1414,8 +1418,7 @@ class MainWindow(QMainWindow):
             self.header_bar.set_task_running(False)
         self.chat_drawer.set_busy(False)
 
-        self.btn_cancel.setVisible(False)
-        self.btn_cancel.setEnabled(True)
+        self._set_cancel_state("idle")
         if reset_progress:
             self.progress_bar.setValue(0)
             self._update_eta_display(0, is_ready=False)
@@ -1445,11 +1448,33 @@ class MainWindow(QMainWindow):
             self.eta_prefix_label.setFixedWidth(0)
             self.eta_value_label.setText("")
 
+    def _set_cancel_state(self, state: str) -> None:
+        """
+        Manage Cancel button state machine:
+          'idle': Hidden, disabled, label reset to localized 'btn_cancel'.
+          'running': Visible, enabled, label set to localized 'btn_cancel'.
+          'cancelling': Visible, disabled, label set to localized 'btn_cancelling'.
+        """
+        if not hasattr(self, "btn_cancel"):
+            return
+        lang = getattr(self, "current_language", "en")
+        if state == "running":
+            self.btn_cancel.setText(get_text("btn_cancel", lang))
+            self.btn_cancel.setEnabled(True)
+            self.btn_cancel.setVisible(True)
+        elif state == "cancelling":
+            self.btn_cancel.setText(get_text("btn_cancelling", lang))
+            self.btn_cancel.setEnabled(False)
+            self.btn_cancel.setVisible(True)
+        else:  # 'idle' or completed / aborted
+            self.btn_cancel.setText(get_text("btn_cancel", lang))
+            self.btn_cancel.setEnabled(False)
+            self.btn_cancel.setVisible(False)
+
     def on_cancel_requested(self) -> None:
         """Centralized immediate cooperative cancellation handler."""
-        if hasattr(self, "btn_cancel"):
-            self.btn_cancel.setText("Cancelling... / 취소 중...")
-            self.btn_cancel.setEnabled(False)
+        self._set_cancel_state("cancelling")
+        self._set_status(get_text("status_canceling", self.current_language))
         if self.active_worker is not None:
             if hasattr(self.active_worker, "request_stop"):
                 self.active_worker.request_stop()
@@ -1500,7 +1525,8 @@ class MainWindow(QMainWindow):
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(0)
         self._end_task(reset_progress=True)
-        self._set_status(get_text("status_cancelled", self.current_language) or "Task Canceled / 작업 취소됨")
+        self._set_cancel_state("idle")
+        self._set_status(get_text("status_cancelled", self.current_language))
 
     def _start_translation(self, source_markdown: str, target_pane: str) -> None:
         """Spawn an asynchronous TranslationWorker for `synthesis` or `perspective`."""

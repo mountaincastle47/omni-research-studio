@@ -40,7 +40,12 @@ except ImportError:
         QOpenGLWidget = None
 
 from core.i18n import get_text
-from core.knowledge_graph import ENTITY_CATEGORIES, KnowledgeGraphEngine
+from core.knowledge_graph import (
+    ENTITY_CATEGORIES,
+    KG_RELATION_TRANSLATIONS,
+    KnowledgeGraphEngine,
+    localize_kg_relation,
+)
 
 
 class _KGNodeItem(QGraphicsEllipseItem):
@@ -59,6 +64,7 @@ class _KGNodeItem(QGraphicsEllipseItem):
     ) -> None:
         super().__init__(-radius, -radius, radius * 2, radius * 2)
         self.node_id = node_id
+        self.original_name = name
         self.name = name
         self.entity_name = name
         self.category = category
@@ -70,6 +76,7 @@ class _KGNodeItem(QGraphicsEllipseItem):
 
         self.setBrush(QBrush(QColor(color_hex)))
         self.setPen(QPen(QColor("#0F172A"), 2.0))
+        self.setZValue(3.0)  # Node circle at Z=3.0
         self.setFlags(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable
             | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
@@ -81,14 +88,42 @@ class _KGNodeItem(QGraphicsEllipseItem):
         desc_str = f"\n{description}" if description else ""
         self.setToolTip(f"[{category}] {name}{cite_str}{desc_str}")
 
-        # Label underneath
-        self.label_item = QGraphicsSimpleTextItem(name, self)
+        # Label underneath with strict Z-value 4.0
+        self.label_item = QGraphicsSimpleTextItem(name)
+        self.label_item.node_item = self
         font = QFont("Segoe UI", 9, QFont.Weight.Bold)
         self.label_item.setFont(font)
         self.label_item.setBrush(QBrush(QColor("#F1F5F9")))
+        self.label_item.setZValue(4.0)  # Node text label at Z=4.0
         self.label_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
-        bounds = self.label_item.boundingRect()
-        self.label_item.setPos(-bounds.width() / 2.0, radius + 4)
+        self._update_label_pos()
+
+    def _update_label_pos(self) -> None:
+        if hasattr(self, "label_item") and self.label_item:
+            bounds = self.label_item.boundingRect()
+            p = self.pos()
+            self.label_item.setPos(p.x() - bounds.width() / 2.0, p.y() + self.radius + 4.0)
+
+    def setPos(self, *args) -> None:
+        super().setPos(*args)
+        self._update_label_pos()
+
+    def itemChange(self, change: QGraphicsItem.GraphicsItemChange, value: Any) -> Any:
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange and hasattr(self, "label_item") and self.label_item:
+            if isinstance(value, QPointF):
+                bounds = self.label_item.boundingRect()
+                self.label_item.setPos(value.x() - bounds.width() / 2.0, value.y() + self.radius + 4.0)
+        return super().itemChange(change, value)
+
+    def setOpacity(self, opacity: float) -> None:
+        super().setOpacity(opacity)
+        if hasattr(self, "label_item") and self.label_item:
+            self.label_item.setOpacity(opacity)
+
+    def setScale(self, scale: float) -> None:
+        super().setScale(scale)
+        if hasattr(self, "label_item") and self.label_item:
+            self.label_item.setScale(scale)
 
     def update_label(self, new_name: str) -> None:
         """Update node name and reposition label underneath without changing node coordinates."""
@@ -96,8 +131,7 @@ class _KGNodeItem(QGraphicsEllipseItem):
         self.name = new_name
         self.entity_name = new_name
         self.label_item.setText(new_name)
-        bounds = self.label_item.boundingRect()
-        self.label_item.setPos(-bounds.width() / 2.0, self.radius + 4)
+        self._update_label_pos()
         cite_str = f" | Citations: {', '.join(f'[{c}]' for c in self.citations)}" if self.citations else ""
         desc_str = f"\n{self.description}" if self.description else ""
         self.setToolTip(f"[{self.category}] {new_name}{cite_str}{desc_str}")
@@ -122,7 +156,7 @@ class _KGNodeItem(QGraphicsEllipseItem):
 
 
 class _KGEdgeItem(QGraphicsLineItem):
-    """Directed edge line with midpoint label and interactive dimming."""
+    """Directed edge line with midpoint label badge and interactive dimming."""
 
     def __init__(
         self,
@@ -134,61 +168,98 @@ class _KGEdgeItem(QGraphicsLineItem):
         y2: float,
         relation: str = "",
         premise: str = "",
+        lang: str = "en",
     ) -> None:
         super().__init__(x1, y1, x2, y2)
         self.source_id = source_id
         self.target_id = target_id
+        self.original_relation = relation
         self.relation = relation
         self.premise = premise
+        self._lang = lang
+
         self.setPen(QPen(QColor("#334155"), 1.8))
-        self.setZValue(1)
+        self.setZValue(1.0)  # Connection lines at Z=1.0
 
         self.badge_bg: Optional[QGraphicsRectItem] = None
         self.label_item: Optional[QGraphicsSimpleTextItem] = None
-        if relation:
-            mid_x = (x1 + x2) / 2.0
-            mid_y = (y1 + y2) / 2.0
-            self.label_item = QGraphicsSimpleTextItem(relation, self)
-            self.label_item.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
-            self.label_item.setBrush(QBrush(QColor("#CBD5E1")))
-            self.label_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
-            bounds = self.label_item.boundingRect()
-            self.label_item.setPos(mid_x - bounds.width() / 2.0, mid_y - bounds.height() / 2.0)
-            self.label_item.setZValue(3)
 
-            # High-contrast background badge to eliminate line-text collisions
-            badge_rect = QRectF(
-                mid_x - bounds.width() / 2.0 - 5,
-                mid_y - bounds.height() / 2.0 - 2,
-                bounds.width() + 10,
-                bounds.height() + 4,
-            )
-            self.badge_bg = QGraphicsRectItem(badge_rect, self)
-            self.badge_bg.setBrush(QBrush(QColor("#070A10")))
+        display_text = localize_kg_relation(relation, lang) if relation else ""
+        if display_text:
+            self.badge_bg = QGraphicsRectItem()
+            self.badge_bg.setZValue(2.0)  # Edge label badge at Z=2.0
+            self.badge_bg.setBrush(QBrush(QColor("#070A10")))  # Perfectly opaque canvas background
             self.badge_bg.setPen(QPen(QColor("#334155"), 1.2))
-            self.badge_bg.setZValue(2)
             self.badge_bg.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
 
-    def update_relation(self, new_relation: str) -> None:
+            self.label_item = QGraphicsSimpleTextItem(display_text)
+            self.label_item.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+            self.label_item.setBrush(QBrush(QColor("#CBD5E1")))
+            self.label_item.setZValue(2.5)  # Edge label text at Z=2.5
+            self.label_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+
+            self._update_badge_geometry(x1, y1, x2, y2, display_text)
+
+    def _update_badge_geometry(self, x1: float, y1: float, x2: float, y2: float, text: str) -> None:
+        if not self.label_item or not self.badge_bg or not text:
+            return
+        dx = x2 - x1
+        dy = y2 - y1
+        dist = math.hypot(dx, dy)
+        mid_x = (x1 + x2) / 2.0
+        mid_y = (y1 + y2) / 2.0
+
+        if dist > 1.0:
+            ux = dx / dist
+            uy = dy / dist
+            # Perpendicular vector pointing generally upwards (opposite positive y)
+            px = -uy
+            py = ux
+            if py > 0 or (py == 0 and px > 0):
+                px = -px
+                py = -py
+            offset_dist = 12.0
+            pos_x = mid_x + px * offset_dist
+            pos_y = mid_y + py * offset_dist
+        else:
+            pos_x = mid_x
+            pos_y = mid_y
+
+        self.label_item.setText(text)
+        bounds = self.label_item.boundingRect()
+        self.label_item.setPos(pos_x - bounds.width() / 2.0, pos_y - bounds.height() / 2.0)
+
+        badge_rect = QRectF(
+            pos_x - bounds.width() / 2.0 - 5.0,
+            pos_y - bounds.height() / 2.0 - 3.0,
+            bounds.width() + 10.0,
+            bounds.height() + 6.0,
+        )
+        self.badge_bg.setRect(badge_rect)
+
+    def update_relation(self, new_relation: str, lang: Optional[str] = None) -> None:
         """Update relation badge text and reposition badge at midpoint."""
         self.prepareGeometryChange()
         self.relation = new_relation
-        if self.label_item and new_relation:
-            self.label_item.setText(new_relation)
-            bounds = self.label_item.boundingRect()
-            line = self.line()
-            mid_x = (line.x1() + line.x2()) / 2.0
-            mid_y = (line.y1() + line.y2()) / 2.0
-            self.label_item.setPos(mid_x - bounds.width() / 2.0, mid_y - bounds.height() / 2.0)
-            if self.badge_bg:
-                badge_rect = QRectF(
-                    mid_x - bounds.width() / 2.0 - 5,
-                    mid_y - bounds.height() / 2.0 - 2,
-                    bounds.width() + 10,
-                    bounds.height() + 4,
-                )
-                self.badge_bg.setRect(badge_rect)
+        if lang:
+            self._lang = lang
+        display_text = localize_kg_relation(new_relation, self._lang)
+        line = self.line()
+        self._update_badge_geometry(line.x1(), line.y1(), line.x2(), line.y2(), display_text)
         self.update()
+
+    def setLine(self, *args) -> None:
+        super().setLine(*args)
+        line = self.line()
+        display_text = localize_kg_relation(self.relation, self._lang)
+        self._update_badge_geometry(line.x1(), line.y1(), line.x2(), line.y2(), display_text)
+
+    def setOpacity(self, opacity: float) -> None:
+        super().setOpacity(opacity)
+        if self.badge_bg:
+            self.badge_bg.setOpacity(opacity)
+        if self.label_item:
+            self.label_item.setOpacity(opacity)
 
 
 class KnowledgeGraphView(QGraphicsView):
@@ -228,6 +299,10 @@ class KnowledgeGraphView(QGraphicsView):
         item = self.itemAt(event.pos())
         if isinstance(item, _KGNodeItem):
             item.mouseDoubleClickEvent(event)
+            event.accept()
+            return
+        elif hasattr(item, "node_item") and isinstance(item.node_item, _KGNodeItem):
+            item.node_item.mouseDoubleClickEvent(event)
             event.accept()
             return
         elif item and item.parentItem() and isinstance(item.parentItem(), _KGNodeItem):
@@ -382,8 +457,13 @@ class KnowledgeGraphWidget(QWidget):
                 y2=y2,
                 relation=e.get("relation", ""),
                 premise=e.get("premise", ""),
+                lang=self._lang,
             )
             self.scene.addItem(edge_item)
+            if edge_item.badge_bg:
+                self.scene.addItem(edge_item.badge_bg)
+            if edge_item.label_item:
+                self.scene.addItem(edge_item.label_item)
             self._edge_items.append(edge_item)
 
         # 2. Render Nodes
@@ -400,8 +480,9 @@ class KnowledgeGraphWidget(QWidget):
                 parent_widget=self,
             )
             node_item.setPos(n.get("x", 0.0), n.get("y", 0.0))
-            node_item.setZValue(3)
             self.scene.addItem(node_item)
+            if node_item.label_item:
+                self.scene.addItem(node_item.label_item)
             self._node_items[nid] = node_item
 
         self.auto_layout_fit()
@@ -602,14 +683,27 @@ class KnowledgeGraphWidget(QWidget):
 
     def update_language(self, lang_code: str, label_map: Optional[Dict[str, str]] = None) -> None:
         """Dynamically update node and edge labels to requested language without moving positions or resetting zoom/pan."""
+        self._lang = lang_code
         self.retranslate_ui(lang_code)
-        if not label_map:
-            return
-        for nid, node in self._node_items.items():
-            new_label = label_map.get(nid) or label_map.get(node.name) or label_map.get(node.entity_name)
-            if new_label:
-                node.update_label(new_label)
+
+        # 1. Update edge relations (translate standard snake_case tokens to Korean if ko, or English if en)
         for edge in self._edge_items:
-            new_rel = label_map.get(edge.relation)
-            if new_rel:
-                edge.update_relation(new_rel)
+            rel = edge.relation or getattr(edge, "original_relation", "")
+            mapped_rel = label_map.get(rel) if label_map else None
+            target_rel = mapped_rel or rel
+            edge.update_relation(target_rel, lang=lang_code)
+
+        # 2. Update entity node names if mappings exist, or restore original English names
+        for nid, node in self._node_items.items():
+            if lang_code == "en":
+                orig = getattr(node, "original_name", "") or nid
+                node.update_label(orig)
+            elif label_map:
+                new_label = (
+                    label_map.get(nid)
+                    or label_map.get(node.name)
+                    or label_map.get(getattr(node, "entity_name", ""))
+                    or label_map.get(getattr(node, "original_name", ""))
+                )
+                if new_label:
+                    node.update_label(new_label)
