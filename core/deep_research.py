@@ -146,7 +146,7 @@ class DeepResearchEngine:
                 ddg_url,
                 headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
             )
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with urllib.request.urlopen(req, timeout=5.0) as resp:
                 html_data = resp.read().decode("utf-8", errors="ignore")
 
             if self.stop_requested.is_set():
@@ -159,7 +159,7 @@ class DeepResearchEngine:
                 raw_links = [urllib.parse.unquote(l) for l in raw_links]
 
             scraped_count = 0
-            for link in raw_links:
+            for link in raw_links[:4]:
                 if self.stop_requested.is_set():
                     break
                 if not link.startswith("http") or any(b in link for b in ["duckduckgo.com", "youtube.com"]):
@@ -170,7 +170,7 @@ class DeepResearchEngine:
                         link,
                         headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
                     )
-                    with urllib.request.urlopen(req_page, timeout=4.0) as page_resp:
+                    with urllib.request.urlopen(req_page, timeout=3.0) as page_resp:
                         raw_page_html = page_resp.read().decode("utf-8", errors="ignore")
 
                     if self.stop_requested.is_set():
@@ -221,75 +221,78 @@ class DeepResearchEngine:
         current_report = report_markdown
         prev_gap_count: Optional[int] = None
 
-        while current_iteration < MAX_GAP_ITERATIONS:
-            if self.stop_requested.is_set():
-                break
-
-            current_iteration += 1
-            notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] Analyzing remaining gaps...")
-
-            gaps = parse_contested_matrix(current_report)
-            if not gaps:
-                notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] No high-priority empirical ambiguities detected in report.")
-                break
-
-            if prev_gap_count is not None:
-                # Delta convergence check: if gaps resolved or delta < 5%, break early
-                delta = (prev_gap_count - len(gaps)) / max(1, prev_gap_count)
-                if len(gaps) == 0 or delta < 0.05:
-                    notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] Gap coverage delta ({delta:.1%}) converged. Ending deepening.")
-                    break
-            prev_gap_count = len(gaps)
-
-            notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] Identified {len(gaps)} empirical gap(s). Formulating targeted queries...")
-            queries = generate_gap_queries(gaps, base_topic=base_topic, max_queries=3)
-
-            iter_new_docs: List[SourceDocument] = []
-            next_cite_id = len(corpus.get_all_documents()) + 1
-
-            for idx, q in enumerate(queries, 1):
+        try:
+            while current_iteration < MAX_GAP_ITERATIONS:
                 if self.stop_requested.is_set():
                     break
-                notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] Executing Deep Gap-Fill [{idx}/{len(queries)}]: {q}...")
-                scraped_items = self.search_and_scrape(q, max_results=1)
 
-                for item in scraped_items:
-                    doc = SourceDocument(
-                        cite_id=next_cite_id,
-                        title=f"[DEEP RESEARCH GAP-FILL] {item['title']}",
-                        source_type="deep_gap_fill",
-                        path_or_uri=item["url"],
-                        content=item["content"],
-                        metadata={
-                            "authority": "primary",
-                            "is_gap_fill": True,
-                            "gap_query": q,
-                            "origin_tag": "Autonomous Deepening Loop",
-                            "iteration": current_iteration,
-                        },
-                    )
-                    corpus.add_document(doc)
-                    iter_new_docs.append(doc)
-                    all_new_docs.append(doc)
-                    next_cite_id += 1
+                current_iteration += 1
+                notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] Analyzing remaining gaps...")
 
-            if not iter_new_docs:
-                notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] Deep research completed. No additional primary documents ingested.")
-                break
+                gaps = parse_contested_matrix(current_report)
+                if not gaps:
+                    notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] No high-priority empirical ambiguities detected in report.")
+                    break
 
-            notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] Synthesizing addendum using {len(iter_new_docs)} new document(s)...")
-            addendum = self._synthesize_addendum(
-                original_report=current_report,
-                gaps=gaps,
-                new_docs=iter_new_docs,
-                lang=lang,
-            )
-            if addendum:
-                if total_addendum:
-                    total_addendum = f"{total_addendum}\n\n{addendum}"
-                else:
-                    total_addendum = addendum
-                current_report = f"{current_report}\n\n{addendum}"
+                if prev_gap_count is not None:
+                    # Delta convergence check: if gaps resolved or delta < 5%, break early
+                    delta = (prev_gap_count - len(gaps)) / max(1, prev_gap_count)
+                    if len(gaps) == 0 or delta < 0.05:
+                        notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] Gap coverage delta ({delta:.1%}) converged. Ending deepening.")
+                        break
+                prev_gap_count = len(gaps)
+
+                notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] Identified {len(gaps)} empirical gap(s). Formulating targeted queries...")
+                queries = generate_gap_queries(gaps, base_topic=base_topic, max_queries=3)
+
+                iter_new_docs: List[SourceDocument] = []
+                next_cite_id = len(corpus.get_all_documents()) + 1
+
+                for idx, q in enumerate(queries, 1):
+                    if self.stop_requested.is_set():
+                        break
+                    notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] Executing Deep Gap-Fill [{idx}/{len(queries)}]: {q}...")
+                    scraped_items = self.search_and_scrape(q, max_results=1)
+
+                    for item in scraped_items:
+                        doc = SourceDocument(
+                            cite_id=next_cite_id,
+                            title=f"[DEEP RESEARCH GAP-FILL] {item['title']}",
+                            source_type="deep_gap_fill",
+                            path_or_uri=item["url"],
+                            content=item["content"],
+                            metadata={
+                                "authority": "primary",
+                                "is_gap_fill": True,
+                                "gap_query": q,
+                                "origin_tag": "Autonomous Deepening Loop",
+                                "iteration": current_iteration,
+                            },
+                        )
+                        corpus.add_document(doc)
+                        iter_new_docs.append(doc)
+                        all_new_docs.append(doc)
+                        next_cite_id += 1
+
+                if not iter_new_docs:
+                    notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] Deep research completed. No additional primary documents ingested.")
+                    break
+
+                notify(f"[Deepening {current_iteration}/{MAX_GAP_ITERATIONS}] Synthesizing addendum using {len(iter_new_docs)} new document(s)...")
+                addendum = self._synthesize_addendum(
+                    original_report=current_report,
+                    gaps=gaps,
+                    new_docs=iter_new_docs,
+                    lang=lang,
+                )
+                if addendum:
+                    if total_addendum:
+                        total_addendum = f"{total_addendum}\n\n{addendum}"
+                    else:
+                        total_addendum = addendum
+                    current_report = f"{current_report}\n\n{addendum}"
+        except Exception as loop_exc:
+            logger.warning(f"Error in run_gap_filling_loop: {loop_exc}")
 
         notify("Autonomous Gap-Fill Addendum complete.")
         return total_addendum, all_new_docs
@@ -342,13 +345,13 @@ class DeepResearchEngine:
             )
 
         try:
-            from google import genai
+            client = self.config_manager.create_client(api_key=api_key)
+            self.active_client = client
+            if self.stop_requested.is_set():
+                return ""
+
             from google.genai import types
 
-            client = genai.Client(
-                api_key=api_key,
-                http_options=types.HttpOptions(timeout=60000.0),
-            )
             response = client.models.generate_content(
                 model=self.model_name,
                 contents=prompt,
@@ -357,7 +360,7 @@ class DeepResearchEngine:
                 ),
             )
             out_text = getattr(response, "text", "") or ""
-            if not out_text.startswith("\n\n##"):
+            if out_text and not out_text.startswith("\n\n##"):
                 out_text = f"\n\n## Autonomous Gap-Fill Addendum / 심층 탐색 보완 보고서\n\n{out_text}"
             return out_text
         except Exception as exc:
@@ -369,3 +372,5 @@ class DeepResearchEngine:
                 f"| :--- | :--- | :--- | :--- | :--- |\n"
                 + "\n".join(rows) + "\n"
             )
+        finally:
+            self.active_client = None

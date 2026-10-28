@@ -124,6 +124,22 @@ MERMAID_CONTROL_TOKENS = {
 }
 
 
+def sanitize_node_label(label: str) -> str:
+    """Sanitize raw Mermaid node label: convert <br/>, <br>, <br /> to newline, unescape html entities, and clean up whitespace."""
+    if not label:
+        return ""
+    # 1. Replace <br>, <br/>, <br />, <BR>, <BR/> etc. with \n
+    cleaned = re.sub(r"(?i)<\s*br\s*/?\s*>", "\n", label)
+    # 2. HTML unescape
+    cleaned = html.unescape(cleaned)
+    # 3. Strip surrounding quotation marks often added in Mermaid syntax: ["..."]
+    cleaned = cleaned.strip(" '\"")
+    # 4. Normalize multiple consecutive spaces per line while preserving \n
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in cleaned.split("\n")]
+    # Strip empty lines from edges but preserve deliberate multi-line breaks
+    return "\n".join(lines).strip()
+
+
 def is_valid_mermaid_node(node_id: str, label: str = "") -> bool:
     """Return True if node_id and label represent valid semantic nodes rather than control tokens."""
     if not node_id or not node_id.strip():
@@ -182,11 +198,11 @@ def parse_mermaid_code(code: str) -> ParsedMermaidGraph:
             matched_edge = True
             g = m.groups()
             src_id = g[0].strip()
-            src_label = next((x.strip() for x in g[1:7] if x is not None), src_id) or src_id
+            src_label = sanitize_node_label(next((x.strip() for x in g[1:7] if x is not None), src_id) or src_id)
             edge_type = g[7]
             edge_label = (g[8] or "").strip()
             tgt_id = g[9].strip()
-            tgt_label = next((x.strip() for x in g[10:16] if x is not None), tgt_id) or tgt_id
+            tgt_label = sanitize_node_label(next((x.strip() for x in g[10:16] if x is not None), tgt_id) or tgt_id)
 
             if not is_valid_mermaid_node(src_id, src_label) or not is_valid_mermaid_node(tgt_id, tgt_label):
                 continue
@@ -215,7 +231,7 @@ def parse_mermaid_code(code: str) -> ParsedMermaidGraph:
             if m_node:
                 g = m_node.groups()
                 n_id = g[0].strip()
-                n_lbl = next((x.strip() for x in g[1:7] if x is not None), n_id) or n_id
+                n_lbl = sanitize_node_label(next((x.strip() for x in g[1:7] if x is not None), n_id) or n_id)
                 if is_valid_mermaid_node(n_id, n_lbl):
                     if n_id not in graph.nodes:
                         graph.nodes[n_id] = MermaidNode(n_id, n_lbl)
@@ -354,44 +370,41 @@ def render_mermaid_to_svg(
     # Draw Nodes
     for n_id, (nx, ny) in node_coords.items():
         node = graph.nodes[n_id]
-        label_escaped = html.escape(node.label or n_id)
-
-        # Word wrap text into lines of ~28 characters
-        words = label_escaped.split()
+        clean_lbl = sanitize_node_label(node.label or n_id)
+        raw_lines = clean_lbl.split("\n")
         lines_wrap: List[str] = []
-        cur_line = ""
-        for w in words:
-            if not cur_line:
-                cur_line = w
-            elif len(cur_line) + len(w) + 1 <= 28:
-                cur_line += " " + w
-            else:
+        for rline in raw_lines:
+            words = rline.split()
+            cur_line = ""
+            for w in words:
+                if not cur_line:
+                    cur_line = w
+                elif len(cur_line) + len(w) + 1 <= 28:
+                    cur_line += " " + w
+                else:
+                    lines_wrap.append(cur_line)
+                    cur_line = w
+            if cur_line:
                 lines_wrap.append(cur_line)
-                cur_line = w
-        if cur_line:
-            lines_wrap.append(cur_line)
 
         if not lines_wrap:
-            lines_wrap = [label_escaped]
-        lines_wrap = lines_wrap[:2]
+            lines_wrap = [clean_lbl]
 
+        this_node_h = max(node_height, len(lines_wrap) * 20 + 28)
         svg_parts.append(f'<a xlink:href="node:{n_id}" target="_top" style="cursor: pointer;">')
         svg_parts.append(
-            f'<rect x="{nx}" y="{ny}" width="{node_width}" height="{node_height}" '
+            f'<rect x="{nx}" y="{ny}" width="{node_width}" height="{this_node_h}" '
             f'rx="10" fill="#0F172A" stroke="#38BDF8" stroke-width="2" filter="url(#dropshadow)"/>'
         )
 
-        if len(lines_wrap) == 1:
+        start_text_y = ny + (this_node_h - len(lines_wrap) * 18) // 2 + 12
+        for line_idx, line_txt in enumerate(lines_wrap):
+            esc_txt = html.escape(line_txt)
+            fill_col = "#F8FAFC" if line_idx == 0 else "#94A3B8"
+            f_size = "11" if len(lines_wrap) > 2 else ("12" if len(lines_wrap) == 1 else "11")
             svg_parts.append(
-                f'<text x="{nx + node_width // 2}" y="{ny + node_height // 2 + 5}" '
-                f'fill="#F8FAFC" font-size="12" font-weight="600" font-family="-apple-system, sans-serif" text-anchor="middle">{lines_wrap[0]}</text>'
-            )
-        else:
-            svg_parts.append(
-                f'<text x="{nx + node_width // 2}" y="{ny + 30}" '
-                f'fill="#F8FAFC" font-size="11" font-weight="600" font-family="-apple-system, sans-serif" text-anchor="middle">{lines_wrap[0]}</text>'
-                f'<text x="{nx + node_width // 2}" y="{ny + 50}" '
-                f'fill="#94A3B8" font-size="11" font-family="-apple-system, sans-serif" text-anchor="middle">{lines_wrap[1]}</text>'
+                f'<text x="{nx + node_width // 2}" y="{start_text_y + line_idx * 18}" '
+                f'fill="{fill_col}" font-size="{f_size}" font-weight="600" font-family="-apple-system, sans-serif" text-anchor="middle">{esc_txt}</text>'
             )
         svg_parts.append('</a>')
 

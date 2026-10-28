@@ -50,8 +50,32 @@ from core.graph_generator import (
     extract_mermaid_blocks,
     parse_mermaid_code,
     render_mermaid_to_svg,
+    sanitize_node_label,
 )
 from core.i18n import get_text
+
+
+def estimate_node_dimensions(label: str, min_w: float = 240.0, max_w: float = 280.0, min_h: float = 72.0) -> Tuple[float, float]:
+    """Calculate dynamic card dimensions based on font metrics or line-count heuristics."""
+    clean = sanitize_node_label(label)
+    try:
+        from PyQt6.QtGui import QFont, QFontMetrics
+        from PyQt6.QtCore import QRect, Qt
+        font = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
+        fm = QFontMetrics(font)
+        text_rect = fm.boundingRect(
+            QRect(0, 0, int(max_w - 24), 0),
+            int(Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap),
+            clean,
+        )
+        w = max(min_w, min(max_w, float(text_rect.width() + 32.0)))
+        h = max(min_h, float(text_rect.height() + 28.0))
+        return round(w, 1), round(h, 1)
+    except Exception:
+        lines = clean.split("\n")
+        est_lines = sum(max(1, math.ceil(len(l) / 26.0)) for l in lines)
+        h = max(min_h, est_lines * 22.0 + 28.0)
+        return min_w, round(h, 1)
 
 
 def intersect_card(cx: float, cy: float, hw: float, hh: float, dx: float, dy: float) -> QPointF:
@@ -65,23 +89,43 @@ def intersect_card(cx: float, cy: float, hw: float, hh: float, dx: float, dy: fl
 
 
 class _CausalNodeGraphicsItem(QGraphicsItem):
-    """Discrete interactive causal node card rendering rounded dark pill with border and wrapped text."""
+    """Discrete interactive causal node card rendering rounded dark pill with border and dynamically wrapped text."""
 
     def __init__(
         self,
         node_id: str,
         label: str,
-        width: float = 240.0,
-        height: float = 72.0,
+        width: Optional[float] = None,
+        height: Optional[float] = None,
         parent_widget: Optional[CausalGraphWidget] = None,
     ) -> None:
         super().__init__()
         self.node_id = node_id
-        self.label = label
-        self.width = width
-        self.height = height
+        self.clean_label = sanitize_node_label(label) or node_id
+        self.label = self.clean_label
         self.parent_widget = parent_widget
         self.is_hovered = False
+
+        self.font = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
+        fm = QFontMetrics(self.font)
+
+        min_w = 240.0
+        max_w = 280.0
+        min_h = 72.0
+
+        # Measure text bounding rect with word wrap within (max_w - 24)
+        from PyQt6.QtCore import QRect
+        text_rect = fm.boundingRect(
+            QRect(0, 0, int(max_w - 24), 0),
+            int(Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap),
+            self.clean_label,
+        )
+
+        computed_w = max(min_w, min(max_w, float(text_rect.width() + 32.0)))
+        computed_h = max(min_h, float(text_rect.height() + 28.0))
+
+        self.width = max(computed_w, float(width)) if width is not None else computed_w
+        self.height = max(computed_h, float(height)) if height is not None else computed_h
 
         self.setFlags(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable
@@ -89,7 +133,7 @@ class _CausalNodeGraphicsItem(QGraphicsItem):
             | QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
         )
         self.setAcceptHoverEvents(True)
-        self.setToolTip(f"[{node_id}] {label}")
+        self.setToolTip(f"[{node_id}] {self.clean_label}")
 
     def boundingRect(self) -> QRectF:
         return QRectF(-self.width / 2.0, -self.height / 2.0, self.width, self.height)
@@ -115,14 +159,14 @@ class _CausalNodeGraphicsItem(QGraphicsItem):
         pen_width = 2.4 if self.is_hovered else 1.8
         painter.strokePath(path, QPen(border_color, pen_width))
 
-        # Text rendering with padding and word wrap
-        inner_rect = rect.adjusted(12.0, 8.0, -12.0, -8.0)
-        painter.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+        # Text rendering centered vertically and horizontally within inner box with full margin clearance
+        inner_rect = rect.adjusted(12.0, 10.0, -12.0, -10.0)
+        painter.setFont(self.font)
         painter.setPen(QPen(QColor("#F8FAFC")))
         painter.drawText(
             inner_rect,
             int(Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap),
-            self.label,
+            self.clean_label,
         )
 
     def hoverEnterEvent(self, event: Any) -> None:
@@ -366,7 +410,13 @@ class CausalGraphWidget(QWidget):
         node_items: Dict[str, _CausalNodeGraphicsItem] = {}
         for n in layout_data["nodes"]:
             nid = n["id"]
-            item = _CausalNodeGraphicsItem(nid, n.get("label", nid), parent_widget=self)
+            item = _CausalNodeGraphicsItem(
+                nid,
+                n.get("label", nid),
+                width=n.get("width"),
+                height=n.get("height"),
+                parent_widget=self,
+            )
             item.setPos(n.get("x", 0.0), n.get("y", 0.0))
             node_items[nid] = item
             self.scene.addItem(item)
@@ -479,29 +529,39 @@ class CausalGraphWidget(QWidget):
 
         # Automatic layout coordinates enforcing minimum 150px horizontal and 100px vertical separation
         is_horizontal = graph.direction in ("LR", "RL")
-        node_w = 240.0
-        node_h = 72.0
         h_sep = 150.0  # Horizontal separation (exceeds 120px mandate)
         v_sep = 100.0  # Vertical separation (exceeds 80px mandate)
 
-        for l_idx, layer in enumerate(layers):
-            count = len(layer)
-            if not is_horizontal:
-                # Top-Down: each layer is a horizontal row
-                total_w = count * node_w + (count - 1) * h_sep
-                start_x = -total_w / 2.0 + node_w / 2.0
-                y = l_idx * (node_h + v_sep)
-                for n_idx, nid in enumerate(layer):
-                    x = start_x + n_idx * (node_w + h_sep)
-                    node_items[nid].setPos(x, y)
-            else:
-                # Left-to-Right: each layer is a vertical column
-                total_h = count * node_h + (count - 1) * v_sep
-                start_y = -total_h / 2.0 + node_h / 2.0
-                x = l_idx * (node_w + h_sep)
-                for n_idx, nid in enumerate(layer):
-                    y = start_y + n_idx * (node_h + v_sep)
-                    node_items[nid].setPos(x, y)
+        if not is_horizontal:
+            # Top-Down layout: layer by layer with cumulative row height and centered items
+            current_y = 0.0
+            for layer in layers:
+                layer_h = max((node_items[nid].height for nid in layer), default=72.0)
+                row_widths = [node_items[nid].width for nid in layer]
+                total_w = sum(row_widths) + (len(layer) - 1) * h_sep
+                cur_x = -total_w / 2.0
+                for nid in layer:
+                    w = node_items[nid].width
+                    node_x = cur_x + w / 2.0
+                    node_y = current_y + layer_h / 2.0
+                    node_items[nid].setPos(round(node_x, 1), round(node_y, 1))
+                    cur_x += w + h_sep
+                current_y += layer_h + v_sep
+        else:
+            # Left-to-Right layout: column by column with cumulative column width and centered items
+            current_x = 0.0
+            for layer in layers:
+                layer_w = max((node_items[nid].width for nid in layer), default=240.0)
+                col_heights = [node_items[nid].height for nid in layer]
+                total_h = sum(col_heights) + (len(layer) - 1) * v_sep
+                cur_y = -total_h / 2.0
+                for nid in layer:
+                    h = node_items[nid].height
+                    node_x = current_x + layer_w / 2.0
+                    node_y = cur_y + h / 2.0
+                    node_items[nid].setPos(round(node_x, 1), round(node_y, 1))
+                    cur_y += h + v_sep
+                current_x += layer_w + h_sep
 
         # Add directed edge items
         for edge in graph.edges:
@@ -609,35 +669,52 @@ def compute_causal_layout_from_markdown(markdown_text: str) -> Optional[Dict[str
         layers.append(unvisited)
 
     is_horizontal = graph.direction in ("LR", "RL")
-    node_w = 240.0
-    node_h = 72.0
     h_sep = 150.0
     v_sep = 100.0
 
+    node_sizes: Dict[str, Tuple[float, float]] = {
+        nid: estimate_node_dimensions(node.label or nid)
+        for nid, node in graph.nodes.items()
+    }
+
     node_positions: Dict[str, Tuple[float, float]] = {}
-    for l_idx, layer in enumerate(layers):
-        count = len(layer)
-        if not is_horizontal:
-            total_w = count * node_w + (count - 1) * h_sep
-            start_x = -total_w / 2.0 + node_w / 2.0
-            y = l_idx * (node_h + v_sep)
-            for n_idx, nid in enumerate(layer):
-                x = start_x + n_idx * (node_w + h_sep)
-                node_positions[nid] = (round(x, 1), round(y, 1))
-        else:
-            total_h = count * node_h + (count - 1) * v_sep
-            start_y = -total_h / 2.0 + node_h / 2.0
-            x = l_idx * (node_w + h_sep)
-            for n_idx, nid in enumerate(layer):
-                y = start_y + n_idx * (node_h + v_sep)
-                node_positions[nid] = (round(x, 1), round(y, 1))
+    if not is_horizontal:
+        current_y = 0.0
+        for layer in layers:
+            layer_h = max((node_sizes[nid][1] for nid in layer), default=72.0)
+            row_widths = [node_sizes[nid][0] for nid in layer]
+            total_w = sum(row_widths) + (len(layer) - 1) * h_sep
+            cur_x = -total_w / 2.0
+            for nid in layer:
+                w = node_sizes[nid][0]
+                node_x = cur_x + w / 2.0
+                node_y = current_y + layer_h / 2.0
+                node_positions[nid] = (round(node_x, 1), round(node_y, 1))
+                cur_x += w + h_sep
+            current_y += layer_h + v_sep
+    else:
+        current_x = 0.0
+        for layer in layers:
+            layer_w = max((node_sizes[nid][0] for nid in layer), default=240.0)
+            col_heights = [node_sizes[nid][1] for nid in layer]
+            total_h = sum(col_heights) + (len(layer) - 1) * v_sep
+            cur_y = -total_h / 2.0
+            for nid in layer:
+                h = node_sizes[nid][1]
+                node_x = current_x + layer_w / 2.0
+                node_y = cur_y + h / 2.0
+                node_positions[nid] = (round(node_x, 1), round(node_y, 1))
+                cur_y += h + v_sep
+            current_x += layer_w + h_sep
 
     nodes_data = [
         {
             "id": nid,
-            "label": node.label or nid,
+            "label": sanitize_node_label(node.label or nid),
             "x": node_positions[nid][0],
             "y": node_positions[nid][1],
+            "width": node_sizes[nid][0],
+            "height": node_sizes[nid][1],
         }
         for nid, node in graph.nodes.items()
         if nid in node_positions

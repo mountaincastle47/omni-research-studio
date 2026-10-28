@@ -1144,6 +1144,7 @@ class GapFillWorker(BaseCancellableWorker):
             return
 
         from core.deep_research import DeepResearchEngine
+        self.start_watchdog("Recursive Gap-Filling")
         try:
             engine = DeepResearchEngine(
                 config_manager=self.config_manager,
@@ -1194,5 +1195,9 @@ class GapFillWorker(BaseCancellableWorker):
         except TaskCancelledError:
             self.cancelled.emit()
         except Exception as exc:
-            if not self.is_cancelled():
+            if self.is_cancelled():
+                self.cancelled.emit()
+            else:
                 self.failed_Error.emit(str(exc))
+        finally:
+            self.stop_watchdog()

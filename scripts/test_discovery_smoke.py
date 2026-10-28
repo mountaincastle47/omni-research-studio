@@ -318,6 +318,55 @@ def run_smoke_test() -> int:
             raise RuntimeError(f"Knowledge Graph scene itemsBoundingRect is not positive: {scene_rect}")
         print(f"   -> Knowledge Graph auto-layout retained {after_layout_count} nodes with valid scene rect: {scene_rect.width():.1f}x{scene_rect.height():.1f}")
 
+        # (c) Causal graph node dynamic vertical expansion and <br/> sanitization
+        from ui.graph_viewer import compute_causal_layout_from_markdown, _CausalNodeGraphicsItem, CausalGraphWidget
+        causal_md_test = (
+            "```mermaid\n"
+            "graph TD\n"
+            '    A["Root Cause Failure Chain<br/>Thermal Shock Overstress<br/>Combustion Instability Logged<br />Primary Nozzle Failure [1]"] -->|triggers| B["Secondary Emergency Shutdown<br/>Telemetry Dump Triggered"]\n'
+            "```"
+        )
+        causal_layout_res = compute_causal_layout_from_markdown(causal_md_test)
+        if not causal_layout_res or not causal_layout_res.get("nodes"):
+            raise RuntimeError("compute_causal_layout_from_markdown returned empty layout!")
+
+        causal_widget = CausalGraphWidget()
+        causal_widget.load_precomputed_layout(causal_layout_res)
+        found_test_nodes = False
+        for it in causal_widget.scene.items():
+            if isinstance(it, _CausalNodeGraphicsItem):
+                found_test_nodes = True
+                if "<br" in it.clean_label or "<br/>" in it.clean_label:
+                    raise RuntimeError(f"Unsanitized <br> tag found in node label: {it.clean_label!r}")
+                if it.node_id == "A":
+                    # 4 lines of text must dynamically expand height well beyond default 72px
+                    if it.height < 110.0:
+                        raise RuntimeError(f"Node A height {it.height} did not expand to accommodate 4 lines of text (expected >= 110px)!")
+                    if it.boundingRect().height() < 110.0:
+                        raise RuntimeError(f"Node A boundingRect height {it.boundingRect().height()} is smaller than 110px!")
+        if not found_test_nodes:
+            raise RuntimeError("CausalGraphWidget scene failed to instantiate _CausalNodeGraphicsItem!")
+        print("   -> Causal graph multi-line text expansion and <br/> sanitization verified.")
+
+        # 11. Verify End-to-End GapFillWorker execution lifecycle (<90s bound)
+        print("[9/9] Verifying Synthesis Pipeline with recursive_gap_filling=True lifecycle...")
+        t_gap_run_start = time.monotonic()
+        test_gap_worker = GapFillWorker(
+            report_markdown=mock_contested_report,
+            corpus=corpus,
+            base_topic="Python asyncio",
+            config_manager=cfg_mgr,
+            model_name="gemini-3.8-flash",
+        )
+        test_gap_worker.run()
+        t_gap_elapsed = time.monotonic() - t_gap_run_start
+        print(f"   -> GapFillWorker completed in {t_gap_elapsed:.1f}s (<90s bound).")
+        if t_gap_elapsed >= 90.0:
+            raise TimeoutError(f"GapFillWorker took {t_gap_elapsed:.1f}s exceeding 90-second bound!")
+        if test_gap_worker.precomputed_causal_layout is None:
+            raise RuntimeError("GapFillWorker failed to precompute causal layout!")
+        print("   -> GapFillWorker lifecycle and precomputations verified end-to-end.")
+
         print("\n=======================================================")
         print("  ALL PRE-BUILD SMOKE TESTS PASSED CLEANLY (EXIT 0)    ")
         print("=======================================================")
