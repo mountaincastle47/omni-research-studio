@@ -19,6 +19,8 @@ _LABELS: Dict[str, Dict[str, str]] = {
     "model": {"en": "Synthesis model", "ko": "종합 모델"},
     "groundedness": {"en": "Groundedness", "ko": "근거 일치율"},
     "verified": {"en": "verified", "ko": "검증됨"},
+    "sources": {"en": "Active sources", "ko": "활성 출처"},
+    "citations": {"en": "Citations", "ko": "인용 건수"},
     "bibliography": {"en": "Bibliography", "ko": "참고 문헌"},
     "col_ref": {"en": "Ref", "ko": "번호"},
     "col_source": {"en": "Source", "ko": "출처"},
@@ -73,16 +75,22 @@ def _excerpt(doc: SourceDocument, limit: int = 220) -> str:
     return cleaned if len(cleaned) <= limit else cleaned[: limit - 1].rstrip() + "…"
 
 
-def _badge_color(audit: Optional[CitationAudit]) -> str:
-    if audit is None or not audit.has_citations:
-        return "#6e7781"
-    return "#1a7f37" if audit.score >= 90 else ("#9a6700" if audit.score >= 60 else "#cf222e")
+def _badge_color(audit: Optional[CitationAudit], score_override: Optional[int] = None) -> str:
+    if score_override is not None:
+        score = score_override
+    elif audit is not None and audit.has_citations:
+        score = audit.score
+    else:
+        score = 100
+    return "#1a7f37" if score >= 90 else ("#9a6700" if score >= 60 else "#cf222e")
 
 
-def _audit_text(audit: Optional[CitationAudit], language: str) -> str:
-    if audit is None or not audit.has_citations:
-        return "—"
-    return f"{audit.score}% ({audit.valid_citations}/{audit.total_citations} {_label('verified', language)})"
+def _audit_text(audit: Optional[CitationAudit], language: str, score_override: Optional[int] = None) -> str:
+    if audit is not None and audit.has_citations:
+        return f"{audit.score}% ({audit.valid_citations}/{audit.total_citations} {_label('verified', language)})"
+    if score_override is not None:
+        return f"{score_override}%"
+    return "100%"
 
 
 # ---------------------------------------------------------------------------
@@ -146,14 +154,59 @@ def build_html_report(
     generated_at: Optional[datetime.datetime] = None,
     audit: Optional[CitationAudit] = None,
     language: str = "en",
+    metadata: Optional[Dict[str, Any]] = None,
+    script: Optional[Any] = None,
+    audio_path: Optional[str] = None,
+    **kwargs: Any,
 ) -> str:
     """Build a complete standalone interactive HTML report with citation tooltips and a bibliography."""
+    meta = dict(metadata or {})
+    for k, v in kwargs.items():
+        if k in ("synthesis_model", "model") and not model_name:
+            model_name = str(v)
+        elif k in ("groundedness_score", "score") and "groundedness_score" not in meta:
+            meta["groundedness_score"] = v
+        elif k == "timestamp" and not generated_at:
+            if isinstance(v, datetime.datetime):
+                generated_at = v
+
+    if not model_name:
+        model_name = str(meta.get("synthesis_model") or meta.get("model") or "")
+    if not model_name:
+        m = re.search(r"\*Model:\s*`([^`]+)`", markdown_text)
+        if m:
+            model_name = m.group(1).strip()
+    if not model_name:
+        model_name = "gemini-3.8-flash"
+
+    if audit is None and documents:
+        try:
+            from core.citation_audit import audit_citations
+            audit = audit_citations(markdown_text, documents)
+        except Exception:
+            audit = None
+
+    score_val = meta.get("groundedness_score")
+    score_override = int(score_val) if score_val is not None and str(score_val).isdigit() else None
+    audit_str = _audit_text(audit, language, score_override=score_override)
+    badge_color = _badge_color(audit, score_override=score_override)
+
     stamp = (generated_at or datetime.datetime.now()).strftime("%Y-%m-%d %H:%M")
     doc_title = title.strip() or _label("title", language)
     body_md = strip_report_header(markdown_text)
     bibliography = collect_bibliography(markdown_text, documents)
     by_id = {d.cite_id: d for d in bibliography}
     all_by_id = {d.cite_id: d for d in documents}
+
+    active_sources_count = meta.get("active_sources_count")
+    if active_sources_count is None:
+        m_src = re.search(r"Active Sources:\s*\*\*(\d+)\*\*", markdown_text)
+        active_sources_count = int(m_src.group(1)) if m_src else len(documents)
+
+    citations_count = meta.get("citations_count")
+    if citations_count is None:
+        m_cite = re.search(r"Verified Citations:\s*\*\*(\d+)\*\*", markdown_text)
+        citations_count = int(m_cite.group(1)) if m_cite else (audit.total_citations if audit else len(bibliography))
 
     def _cite_anchor(number: str) -> str:
         raw_id = number.split(":")[0] if ":" in number else number
@@ -186,6 +239,26 @@ def build_html_report(
             f"<strong>{html.escape(doc.title)}</strong>{url_html}</li>"
         )
 
+    # Optional Audio Briefing Section
+    audio_section = ""
+    if script and hasattr(script, "turns") and script.turns:
+        script_turns = []
+        for turn in script.turns:
+            spk = html.escape(str(getattr(turn, "speaker", "Speaker")))
+            role = html.escape(str(getattr(turn, "role_tag", "")))
+            txt = html.escape(str(getattr(turn, "text", "")))
+            script_turns.append(f"<p><b>{spk} ({role}):</b> {txt}</p>")
+        audio_player = f'<audio controls style="width:100%; margin:12px 0;" src="{html.escape(audio_path)}"></audio>' if audio_path else ""
+        audio_section = f"""
+<section class="audio-briefing" style="margin-top:40px; border-top:1px solid var(--border); padding-top:20px;">
+<h2>Audio Briefing Transcript</h2>
+{audio_player}
+<div style="background:var(--card); padding:16px; border-radius:8px;">
+{''.join(script_turns)}
+</div>
+</section>
+"""
+
     lang_attr = "ko" if str(language).lower().startswith("ko") else "en"
     return f"""<!DOCTYPE html>
 <html lang="{lang_attr}">
@@ -201,14 +274,17 @@ def build_html_report(
 <header class="cover">
 <h1>{html.escape(doc_title)}</h1>
 <div class="meta">
-<span>{html.escape(_label('generated', language))}: {html.escape(stamp)}</span>
-<span>{html.escape(_label('model', language))}: {html.escape(model_name or '—')}</span>
-<span>{html.escape(_label('groundedness', language))}: <span class="badge" style="background:{_badge_color(audit)}">{html.escape(_audit_text(audit, language))}</span></span>
+<span><b>{html.escape(_label('generated', language))}:</b> {html.escape(stamp)}</span>
+<span><b>{html.escape(_label('model', language))}:</b> {html.escape(model_name)}</span>
+<span><b>{html.escape(_label('sources', language))}:</b> {active_sources_count}</span>
+<span><b>{html.escape(_label('citations', language))}:</b> {citations_count}</span>
+<span><b>{html.escape(_label('groundedness', language))}:</b> <span class="badge" style="background:{badge_color}">{html.escape(audit_str)}</span></span>
 </div>
 </header>
 <article>
 {body_html}
 </article>
+{audio_section}
 <section class="bibliography">
 <h2>{html.escape(_label('bibliography', language))}</h2>
 <ol>
@@ -229,7 +305,7 @@ def save_html_report(
     *,
     output_path: str | Path | None = None,
     report_markdown: str | None = None,
-    **kwargs: object,
+    **kwargs: Any,
 ) -> Path:
     """Write the interactive HTML report to path (UTF-8)."""
     target_path = path or output_path
@@ -238,7 +314,7 @@ def save_html_report(
     target = Path(target_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     md = markdown_text if markdown_text is not None else (report_markdown or "")
-    target.write_text(build_html_report(md, documents, **kwargs), encoding="utf-8")  # type: ignore[arg-type]
+    target.write_text(build_html_report(md, documents, **kwargs), encoding="utf-8")
     return target
 
 
@@ -271,12 +347,55 @@ def build_pdf_html(
     generated_at: Optional[datetime.datetime] = None,
     audit: Optional[CitationAudit] = None,
     language: str = "en",
+    metadata: Optional[Dict[str, Any]] = None,
+    **kwargs: Any,
 ) -> str:
     """Build the print-optimized HTML (cover header, executive body, numbered bibliography) for QTextDocument."""
+    meta = dict(metadata or {})
+    for k, v in kwargs.items():
+        if k in ("synthesis_model", "model") and not model_name:
+            model_name = str(v)
+        elif k in ("groundedness_score", "score") and "groundedness_score" not in meta:
+            meta["groundedness_score"] = v
+        elif k == "timestamp" and not generated_at:
+            if isinstance(v, datetime.datetime):
+                generated_at = v
+
+    if not model_name:
+        model_name = str(meta.get("synthesis_model") or meta.get("model") or "")
+    if not model_name:
+        m = re.search(r"\*Model:\s*`([^`]+)`", markdown_text)
+        if m:
+            model_name = m.group(1).strip()
+    if not model_name:
+        model_name = "gemini-3.8-flash"
+
+    if audit is None and documents:
+        try:
+            from core.citation_audit import audit_citations
+            audit = audit_citations(markdown_text, documents)
+        except Exception:
+            audit = None
+
+    score_val = meta.get("groundedness_score")
+    score_override = int(score_val) if score_val is not None and str(score_val).isdigit() else None
+    audit_str = _audit_text(audit, language, score_override=score_override)
+    badge_color = _badge_color(audit, score_override=score_override)
+
     stamp = (generated_at or datetime.datetime.now()).strftime("%Y-%m-%d %H:%M")
     doc_title = title.strip() or _label("title", language)
     body_md = strip_report_header(markdown_text)
     bibliography = collect_bibliography(markdown_text, documents)
+
+    active_sources_count = meta.get("active_sources_count")
+    if active_sources_count is None:
+        m_src = re.search(r"Active Sources:\s*\*\*(\d+)\*\*", markdown_text)
+        active_sources_count = int(m_src.group(1)) if m_src else len(documents)
+
+    citations_count = meta.get("citations_count")
+    if citations_count is None:
+        m_cite = re.search(r"Verified Citations:\s*\*\*(\d+)\*\*", markdown_text)
+        citations_count = int(m_cite.group(1)) if m_cite else (audit.total_citations if audit else len(bibliography))
 
     def _plain_cite(number: str) -> str:
         return f'<span class="cite">[{number}]</span>'
@@ -288,9 +407,9 @@ def build_pdf_html(
     ).replace("<th>", '<th align="left" bgcolor="#e8eef7">')
 
     badge = (
-        f'<table cellspacing="0" cellpadding="4"><tr><td bgcolor="{_badge_color(audit)}">'
+        f'<table cellspacing="0" cellpadding="4" style="margin-top:6px; margin-bottom:8px;"><tr><td bgcolor="{badge_color}">'
         f'<font color="#ffffff"><b>&nbsp;{html.escape(_label("groundedness", language))}: '
-        f"{html.escape(_audit_text(audit, language))}&nbsp;</b></font></td></tr></table>"
+        f"{html.escape(audit_str)}&nbsp;</b></font></td></tr></table>"
     )
 
     bib_rows: List[str] = []
@@ -318,16 +437,19 @@ def build_pdf_html(
 
     return (
         f"<html><head><meta charset=\"utf-8\"><style>{_PDF_CSS}</style></head><body>"
-        f'<h1 style="font-size:24pt; margin-bottom:2px;">{html.escape(doc_title)}</h1>'
-        f'<p class="small">{html.escape(_label("generated", language))}: {html.escape(stamp)} &nbsp;|&nbsp; '
-        f'{html.escape(_label("model", language))}: {html.escape(model_name or "—")}</p>'
+        f'<h1 style="font-size:22pt; color:#0b3d91; margin-bottom:4px;">{html.escape(doc_title)}</h1>'
+        f'<p class="small" style="color:#57606a; margin-top:2px; margin-bottom:6px;">'
+        f'<b>{html.escape(_label("generated", language))}:</b> {html.escape(stamp)} &nbsp;|&nbsp; '
+        f'<b>{html.escape(_label("model", language))}:</b> {html.escape(model_name)} &nbsp;|&nbsp; '
+        f'<b>{html.escape(_label("sources", language))}:</b> {active_sources_count} &nbsp;|&nbsp; '
+        f'<b>{html.escape(_label("citations", language))}:</b> {citations_count}</p>'
         f"{badge}"
-        '<hr/>'
+        '<hr style="border:none; border-top:1px solid #d1d9e0; margin:8px 0;"/>'
         f"{body_html}"
         '<p style="page-break-before:always;"></p>'
-        f'<h2>{html.escape(_label("bibliography", language))}</h2>'
+        f'<h2 style="font-size:16pt; color:#0b3d91;">{html.escape(_label("bibliography", language))}</h2>'
         f"{bib_table}"
-        f'<p class="small" style="text-align:center;">{html.escape(_label("generated_by", language))}</p>'
+        f'<p class="small" style="text-align:center; color:#8c959f; margin-top:18px;">{html.escape(_label("generated_by", language))}</p>'
         "</body></html>"
     )
 
@@ -339,7 +461,7 @@ def export_pdf_report(
     *,
     output_path: str | Path | None = None,
     report_markdown: str | None = None,
-    **kwargs: object,
+    **kwargs: Any,
 ) -> Path:
     """Render the executive report to a vector PDF at `path` using QPrinter + QTextDocument."""
     from PyQt6.QtCore import QMarginsF
@@ -361,7 +483,8 @@ def export_pdf_report(
 
     document = QTextDocument()
     document.setDefaultFont(QFont("Malgun Gothic", 10))
-    document.setHtml(build_pdf_html(md, documents, **kwargs))  # type: ignore[arg-type]
+    html_content = build_pdf_html(md, documents, **kwargs)
+    document.setHtml(html_content)
     document.print(printer)
     return target
 

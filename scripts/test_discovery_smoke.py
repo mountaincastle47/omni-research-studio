@@ -815,6 +815,128 @@ def run_smoke_test() -> int:
         print(f"   -> Verified strictly 0 collisions across radiating edges (all rectA.intersects(rectB) == False).")
         print("   -> Verified dynamic translation updates and anti-collision recalculation.")
 
+        # 16. Verify Workspace Export Functions (Markdown, HTML, PDF, SVG)
+        print("[16/16] Verifying Workspace Export Functions (Markdown, HTML, PDF, SVG)...")
+        import tempfile
+        from core.exporter import save_html_report, export_pdf_report, build_pdf_html, build_html_report
+        from core.document_loader import SourceDocument
+        from ui.widgets.knowledge_graph import KnowledgeGraphWidget
+
+        with tempfile.TemporaryDirectory() as export_tmp:
+            export_dir = Path(export_tmp)
+            md_path = export_dir / "test_synthesis.md"
+            html_path = export_dir / "test_report.html"
+            pdf_path = export_dir / "test_report.pdf"
+            causal_svg_path = export_dir / "causal_graph.svg"
+            kg_svg_path = export_dir / "knowledge_graph.svg"
+
+            test_docs = [
+                SourceDocument(
+                    cite_id=1,
+                    title="Asyncio Event Loop Specifications",
+                    path_or_uri="https://docs.python.org/3/library/asyncio.html",
+                    content="The asyncio module provides infrastructure for writing concurrent code using the async/await syntax.",
+                    source_type="web_page",
+                    enabled=True,
+                ),
+                SourceDocument(
+                    cite_id=2,
+                    title="High-Throughput Concurrency Benchmarks",
+                    path_or_uri="https://benchmarks.example.com/concurrency",
+                    content="Empirical event loop tests show epoll overhead scales with active descriptors.",
+                    source_type="academic_doi",
+                    enabled=True,
+                ),
+            ]
+            synth_markdown = (
+                "# High-Performance Concurrency Research\n\n"
+                "Python asyncio utilizes an event loop for multiplexing [1]. "
+                "Empirical benchmarks demonstrate minimal context switch latency [2].\n"
+            )
+
+            # 16.1 Markdown Export Verification
+            meta_payload = main_win._collect_synthesis_metadata(synth_markdown)
+            md_header = (
+                f"# {meta_payload['title']}\n"
+                f"*Model: `{meta_payload['model_name']}` (Temperature = `0.0`) | "
+                f"Active Sources: **{meta_payload['active_sources_count']}** | "
+                f"Verified Citations: **{meta_payload['citations_count']}***\n\n---\n\n"
+            )
+            md_path.write_text(md_header + synth_markdown, encoding="utf-8")
+            saved_md = md_path.read_text(encoding="utf-8")
+            if not saved_md or "Model:" not in saved_md or "Active Sources:" not in saved_md:
+                raise RuntimeError("Markdown export was empty or missing metadata header!")
+
+            # 16.2 HTML Export Verification
+            save_html_report(
+                output_path=html_path,
+                title="High-Performance Concurrency Research",
+                report_markdown=synth_markdown,
+                documents=test_docs,
+                model_name=meta_payload["model_name"],
+                audit=meta_payload["audit"],
+                metadata=meta_payload,
+                language="en",
+            )
+            if not html_path.exists() or html_path.stat().st_size < 100:
+                raise RuntimeError("HTML export file was not generated or is empty!")
+            html_content = html_path.read_text(encoding="utf-8")
+            if "<html" not in html_content or "</html>" not in html_content:
+                raise RuntimeError("HTML export file is malformed!")
+            if "Synthesis model: —" in html_content or "Groundedness: <span class=\"badge\" style=\"background:#6e7781\">—" in html_content:
+                raise RuntimeError("HTML export contains unpopulated '—' metadata placeholders!")
+            if meta_payload["model_name"] not in html_content:
+                raise RuntimeError(f"Expected model name '{meta_payload['model_name']}' in HTML export!")
+
+            # 16.3 PDF Export Verification
+            pdf_html = build_pdf_html(
+                markdown_text=synth_markdown,
+                documents=test_docs,
+                title="High-Performance Concurrency Research",
+                model_name=meta_payload["model_name"],
+                audit=meta_payload["audit"],
+                metadata=meta_payload,
+                language="en",
+            )
+            if "Synthesis model: —" in pdf_html or "Groundedness: —" in pdf_html:
+                raise RuntimeError("PDF HTML template contains unpopulated '—' metadata placeholders!")
+            if meta_payload["model_name"] not in pdf_html:
+                raise RuntimeError(f"Expected model name '{meta_payload['model_name']}' in PDF HTML!")
+            export_pdf_report(
+                output_path=pdf_path,
+                title="High-Performance Concurrency Research",
+                report_markdown=synth_markdown,
+                documents=test_docs,
+                model_name=meta_payload["model_name"],
+                audit=meta_payload["audit"],
+                metadata=meta_payload,
+                language="en",
+            )
+            if not pdf_path.exists() or pdf_path.stat().st_size < 500:
+                raise RuntimeError("PDF export file was not generated or is too small!")
+
+            # 16.4 Graph Vector SVG Export Verification
+            causal_widget.export_to_svg(causal_svg_path)
+            if not causal_svg_path.exists() or causal_svg_path.stat().st_size < 50:
+                raise RuntimeError("Causal Graph SVG export file was not created or is empty!")
+            c_svg_content = causal_svg_path.read_text(encoding="utf-8")
+            if "<svg" not in c_svg_content or "</svg>" not in c_svg_content:
+                raise RuntimeError("Causal Graph SVG export does not contain valid XML SVG!")
+
+            kg_widget = KnowledgeGraphWidget(lang="en")
+            kg_widget.set_documents(test_docs)
+            kg_widget.export_to_svg(kg_svg_path)
+            if not kg_svg_path.exists() or kg_svg_path.stat().st_size < 50:
+                raise RuntimeError("Knowledge Graph SVG export file was not created or is empty!")
+            kg_svg_content = kg_svg_path.read_text(encoding="utf-8")
+            if "<svg" not in kg_svg_content or "</svg>" not in kg_svg_content:
+                raise RuntimeError("Knowledge Graph SVG export does not contain valid XML SVG!")
+
+        print("   -> Markdown export verified with valid structure and model metadata.")
+        print(f"   -> HTML export verified with populated metadata (Model: {meta_payload['model_name']}).")
+        print("   -> PDF export verified with populated metadata and vector compilation.")
+        print("   -> Causal Graph and Knowledge Graph SVG vector exports verified.")
+
         print("\n=======================================================")
         print("  ALL PRE-BUILD SMOKE TESTS PASSED CLEANLY (EXIT 0)    ")
         print("=======================================================")

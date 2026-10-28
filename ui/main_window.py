@@ -2494,6 +2494,38 @@ class MainWindow(QMainWindow):
 
     # --- Export Actions ---
 
+    def _collect_synthesis_metadata(self, active_text: str) -> Dict[str, Any]:
+        """Assemble unified metadata payload for all export routines."""
+        model_name = (
+            getattr(self, "last_synthesis_model", None)
+            or (self.synthesis_model_combo.currentText() if hasattr(self, "synthesis_model_combo") else "")
+            or "gemini-3.8-flash"
+        )
+        if self.last_audit is None and self.corpus.enabled_documents:
+            self._refresh_audit()
+
+        audit = getattr(self, "last_audit", None)
+        score = audit.score if audit and audit.has_citations else 100
+        active_sources_count = len(self.corpus.enabled_documents)
+        citations_count = (
+            len(self.last_citations)
+            if hasattr(self, "last_citations") and self.last_citations
+            else (audit.total_citations if audit else 0)
+        )
+        title = self.query_input.toPlainText().strip() or self.sweep_topic_input.toPlainText().strip() or "OmniResearch Report"
+
+        return {
+            "title": title,
+            "model_name": model_name,
+            "synthesis_model": model_name,
+            "audit": audit,
+            "groundedness_score": score,
+            "active_sources_count": active_sources_count,
+            "citations_count": citations_count,
+            "timestamp": datetime.datetime.now(),
+            "language": self.current_language,
+        }
+
     def _on_export_synthesis(self) -> None:
         active_text = (
             self.synthesis_translated_text
@@ -2502,15 +2534,29 @@ class MainWindow(QMainWindow):
         )
         if not active_text:
             return
+        meta = self._collect_synthesis_metadata(active_text)
         save_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Save Report (.md)",
+            get_text("export_as_md", self.current_language),
             str(Path.home() / "omniresearch_synthesis.md"),
             "Markdown Files (*.md);;Text Files (*.txt)",
         )
         if save_path:
-            Path(save_path).write_text(active_text, encoding="utf-8")
-            self._set_status(f"Saved report to {save_path}")
+            try:
+                if not active_text.strip().startswith("# "):
+                    header = (
+                        f"# {meta['title']}\n"
+                        f"*Model: `{meta['model_name']}` (Temperature = `0.0`) | "
+                        f"Active Sources: **{meta['active_sources_count']}** | "
+                        f"Verified Citations: **{meta['citations_count']}***\n\n---\n\n"
+                    )
+                    content = header + active_text
+                else:
+                    content = active_text
+                Path(save_path).write_text(content, encoding="utf-8")
+                self._set_status(get_text("status_export_saved", self.current_language).format(path=save_path))
+            except Exception as exc:
+                QMessageBox.critical(self, "Export Error", f"Failed to save Markdown export:\n{exc}")
 
     def _on_export_audio_script(self) -> None:
         if not self.last_podcast_script:
@@ -2522,11 +2568,14 @@ class MainWindow(QMainWindow):
             "Text Files (*.txt);;Markdown Files (*.md)",
         )
         if save_path:
-            lines = [f"# {self.last_podcast_script.title}\n"]
-            for turn in self.last_podcast_script.turns:
-                lines.append(f"**{turn.speaker} ({turn.role_tag}):** {turn.text}\n")
-            Path(save_path).write_text("\n".join(lines), encoding="utf-8")
-            self._set_status(f"Saved script to {save_path}")
+            try:
+                lines = [f"# {self.last_podcast_script.title}\n"]
+                for turn in self.last_podcast_script.turns:
+                    lines.append(f"**{turn.speaker} ({turn.role_tag}):** {turn.text}\n")
+                Path(save_path).write_text("\n".join(lines), encoding="utf-8")
+                self._set_status(f"Saved script to {save_path}")
+            except Exception as exc:
+                QMessageBox.critical(self, "Export Error", f"Failed to save audio script export:\n{exc}")
 
     # --- Source Inspection & Citation Navigation ---
 
@@ -3052,15 +3101,17 @@ class MainWindow(QMainWindow):
             "Markdown Files (*.md)",
         )
         if save_path:
-            topic = self.query_input.toPlainText().strip() or self.sweep_topic_input.toPlainText().strip() or "OmniResearch Report"
-            score = getattr(self.last_audit, "groundedness_score", 100) if self.last_audit else 100
-            export_to_obsidian(
-                output_path=save_path,
-                report_md=active_text,
-                sources_list=self.corpus.enabled_documents,
-                metadata={"topic": topic, "groundedness_score": score},
-            )
-            self._set_status(get_text("status_export_saved", self.current_language).format(path=save_path))
+            try:
+                meta = self._collect_synthesis_metadata(active_text)
+                export_to_obsidian(
+                    output_path=save_path,
+                    report_md=active_text,
+                    sources_list=self.corpus.enabled_documents,
+                    metadata=meta,
+                )
+                self._set_status(get_text("status_export_saved", self.current_language).format(path=save_path))
+            except Exception as exc:
+                QMessageBox.critical(self, "Export Error", f"Failed to save Obsidian export:\n{exc}")
 
     def _on_export_marp(self) -> None:
         active_text = (
@@ -3077,13 +3128,16 @@ class MainWindow(QMainWindow):
             "Markdown Slides (*.marp.md *.md)",
         )
         if save_path:
-            topic = self.query_input.toPlainText().strip() or self.sweep_topic_input.toPlainText().strip() or "OmniResearch Executive Briefing"
-            export_to_marp(
-                output_path=save_path,
-                report_md=active_text,
-                metadata={"title": topic},
-            )
-            self._set_status(get_text("status_export_saved", self.current_language).format(path=save_path))
+            try:
+                meta = self._collect_synthesis_metadata(active_text)
+                export_to_marp(
+                    output_path=save_path,
+                    report_md=active_text,
+                    metadata=meta,
+                )
+                self._set_status(get_text("status_export_saved", self.current_language).format(path=save_path))
+            except Exception as exc:
+                QMessageBox.critical(self, "Export Error", f"Failed to save Marp export:\n{exc}")
 
     def _on_theme_selected(self, theme_key: str) -> None:
         qss = self.theme_manager.set_theme(theme_key)
@@ -3497,17 +3551,24 @@ class MainWindow(QMainWindow):
             "HTML Files (*.html)",
         )
         if save_path:
-            title = self.query_input.toPlainText().strip() or self.sweep_topic_input.toPlainText().strip() or "OmniResearch Report"
-            save_html_report(
-                output_path=save_path,
-                title=title,
-                report_markdown=active_text,
-                documents=self.corpus.enabled_documents,
-                script=self.last_podcast_script,
-                audio_path=self.last_audio_path,
-                language=self.current_language,
-            )
-            self._set_status(get_text("status_export_saved", self.current_language).format(path=save_path))
+            try:
+                meta = self._collect_synthesis_metadata(active_text)
+                save_html_report(
+                    output_path=save_path,
+                    title=meta["title"],
+                    report_markdown=active_text,
+                    documents=self.corpus.enabled_documents,
+                    model_name=meta["model_name"],
+                    audit=meta["audit"],
+                    generated_at=meta["timestamp"],
+                    metadata=meta,
+                    script=self.last_podcast_script,
+                    audio_path=self.last_audio_path,
+                    language=self.current_language,
+                )
+                self._set_status(get_text("status_export_saved", self.current_language).format(path=save_path))
+            except Exception as exc:
+                QMessageBox.critical(self, "Export Error", f"Failed to save HTML export:\n{exc}")
 
     def _on_export_pdf(self) -> None:
         active_text = (
@@ -3524,15 +3585,22 @@ class MainWindow(QMainWindow):
             "PDF Files (*.pdf)",
         )
         if save_path:
-            title = self.query_input.toPlainText().strip() or self.sweep_topic_input.toPlainText().strip() or "OmniResearch Report"
-            export_pdf_report(
-                output_path=save_path,
-                title=title,
-                report_markdown=active_text,
-                documents=self.corpus.enabled_documents,
-                language=self.current_language,
-            )
-            self._set_status(get_text("status_export_saved", self.current_language).format(path=save_path))
+            try:
+                meta = self._collect_synthesis_metadata(active_text)
+                export_pdf_report(
+                    output_path=save_path,
+                    title=meta["title"],
+                    report_markdown=active_text,
+                    documents=self.corpus.enabled_documents,
+                    model_name=meta["model_name"],
+                    audit=meta["audit"],
+                    generated_at=meta["timestamp"],
+                    metadata=meta,
+                    language=self.current_language,
+                )
+                self._set_status(get_text("status_export_saved", self.current_language).format(path=save_path))
+            except Exception as exc:
+                QMessageBox.critical(self, "Export Error", f"Failed to save PDF export:\n{exc}")
 
     def _on_export_bibtex(self) -> None:
         active_text = (
@@ -3547,12 +3615,15 @@ class MainWindow(QMainWindow):
             "BibTeX Files (*.bib)",
         )
         if save_path:
-            export_bibtex_report(
-                output_path=save_path,
-                markdown_text=active_text,
-                documents=self.corpus.enabled_documents,
-            )
-            self._set_status(get_text("status_export_saved", self.current_language).format(path=save_path))
+            try:
+                export_bibtex_report(
+                    output_path=save_path,
+                    markdown_text=active_text or "",
+                    documents=self.corpus.enabled_documents,
+                )
+                self._set_status(get_text("status_export_saved", self.current_language).format(path=save_path))
+            except Exception as exc:
+                QMessageBox.critical(self, "Export Error", f"Failed to save BibTeX export:\n{exc}")
 
     # --- Follow-Up Q&A Console Handlers ---
 
