@@ -131,6 +131,15 @@ def main() -> int:
     app.setOrganizationName("OmniResearch")
     app.setFont(QFont("Segoe UI", 10))
 
+    try:
+        from PyQt6.QtWidgets import QToolTip
+        QToolTip.setFont(QFont("Segoe UI", 10))
+    except Exception:
+        pass
+
+    from ui.theme_manager import ThemeManager
+    app.setStyleSheet(ThemeManager.get_instance().get_stylesheet())
+
     # Automated Smoke Test Hook
     if "--smoke-test" in sys.argv:
         # Verify SQLite DB connections and offscreen boot

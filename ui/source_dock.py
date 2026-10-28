@@ -64,22 +64,27 @@ class FigureInspectorDialog(QDialog):
         bar.addStretch(1)
 
         self.btn_zoom_in = QPushButton("Zoom In (+)")
+        self.btn_zoom_in.setToolTip(get_text("tooltip_zoom_in", self._lang))
         self.btn_zoom_in.clicked.connect(self._zoom_in)
         bar.addWidget(self.btn_zoom_in)
 
         self.btn_zoom_out = QPushButton("Zoom Out (-)")
+        self.btn_zoom_out.setToolTip(get_text("tooltip_zoom_out", self._lang))
         self.btn_zoom_out.clicked.connect(self._zoom_out)
         bar.addWidget(self.btn_zoom_out)
 
         self.btn_reset = QPushButton("Reset Zoom")
+        self.btn_reset.setToolTip(get_text("reset_graph", self._lang))
         self.btn_reset.clicked.connect(self._reset_zoom)
         bar.addWidget(self.btn_reset)
 
         self.btn_open_external = QPushButton("Open External")
+        self.btn_open_external.setToolTip(get_text("tooltip_open_url", self._lang))
         self.btn_open_external.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(self.figure_path)))
         bar.addWidget(self.btn_open_external)
 
         self.btn_vision = QPushButton(get_text("btn_vision_analyze", self._lang))
+        self.btn_vision.setToolTip(get_text("tooltip_vision_analyze", self._lang))
         self.btn_vision.setStyleSheet("QPushButton { background-color: #0284C7; color: #FFFFFF; font-weight: 700; border-radius: 4px; padding: 4px 12px; font-size: 11px; } QPushButton:hover { background-color: #0369A1; }")
         self.btn_vision.clicked.connect(self._on_vision_analyze)
         bar.addWidget(self.btn_vision)
@@ -211,6 +216,7 @@ class SourceInspectorDock(QDockWidget):
         meta_row.addStretch(1)
 
         self.open_url_btn = QPushButton(get_text("inspector_btn_open_url", self._lang))
+        self.open_url_btn.setToolTip(get_text("tooltip_open_url", self._lang))
         self.open_url_btn.setStyleSheet(
             "background-color: #1E293B; color: #58A6FF; font-size: 11px; font-weight: 600; "
             "padding: 3px 10px; border: 1px solid #334155; border-radius: 4px;"
@@ -233,11 +239,13 @@ class SourceInspectorDock(QDockWidget):
         search_row.addWidget(self.search_input, stretch=1)
 
         self.prev_btn = QPushButton(get_text("inspector_btn_prev", self._lang))
+        self.prev_btn.setToolTip(get_text("tooltip_source_prev", self._lang))
         self.prev_btn.setFixedWidth(50)
         self.prev_btn.clicked.connect(self.find_prev)
         search_row.addWidget(self.prev_btn)
 
         self.next_btn = QPushButton(get_text("inspector_btn_next", self._lang))
+        self.next_btn.setToolTip(get_text("tooltip_source_next", self._lang))
         self.next_btn.setFixedWidth(50)
         self.next_btn.clicked.connect(self.find_next)
         search_row.addWidget(self.next_btn)
@@ -440,8 +448,11 @@ class SourceInspectorDock(QDockWidget):
         """Retranslate static labels and rebuild metadata strings."""
         self._lang = lang
         self.open_url_btn.setText(get_text("inspector_btn_open_url", lang))
+        self.open_url_btn.setToolTip(get_text("tooltip_open_url", lang))
         self.prev_btn.setText(get_text("inspector_btn_prev", lang))
+        self.prev_btn.setToolTip(get_text("tooltip_source_prev", lang))
         self.next_btn.setText(get_text("inspector_btn_next", lang))
+        self.next_btn.setToolTip(get_text("tooltip_source_next", lang))
         self.search_input.setPlaceholderText(get_text("inspector_search_placeholder", lang))
         if hasattr(self, "figures_title"):
             self.figures_title.setText(get_text("figures_panel_title", lang))

@@ -630,6 +630,30 @@ def run_smoke_test() -> int:
         print("   -> Toggling to English and back to Korean read from cache with 0 API/worker dispatches.")
         print("   -> Grounded Synthesis, Causal Graph, Knowledge Graph, and checkbox states preserved.")
 
+        # 13. Verify Universal 100% Button Tooltip Coverage across English & Korean
+        print("[13/13] Verifying 100% button tooltip coverage across English and Korean locales...")
+        from PyQt6.QtWidgets import QPushButton, QToolButton
+        en_idx = 0 if main_win.language_combo.itemData(0) == "en" else 1
+        main_win.language_combo.setCurrentIndex(en_idx)
+        buttons_en = main_win.findChildren(QPushButton) + main_win.findChildren(QToolButton)
+        if len(buttons_en) < 30:
+            raise RuntimeError(f"Expected at least 30 buttons discovered in hierarchy, found {len(buttons_en)}")
+        empty_en = [b for b in buttons_en if not b.toolTip().strip()]
+        if empty_en:
+            names = [f"{b.__class__.__name__}({b.text() or b.objectName()})" for b in empty_en]
+            raise RuntimeError(f"Found {len(empty_en)} buttons with empty tooltips in English: {names}")
+
+        ko_idx = 1 if main_win.language_combo.itemData(1) == "ko" else 0
+        main_win.language_combo.setCurrentIndex(ko_idx)
+        buttons_ko = main_win.findChildren(QPushButton) + main_win.findChildren(QToolButton)
+        empty_ko = [b for b in buttons_ko if not b.toolTip().strip()]
+        if empty_ko:
+            names = [f"{b.__class__.__name__}({b.text() or b.objectName()})" for b in empty_ko]
+            raise RuntimeError(f"Found {len(empty_ko)} buttons with empty tooltips in Korean: {names}")
+
+        print(f"   -> Verified 100% non-empty tooltips across {len(buttons_en)} buttons in English.")
+        print(f"   -> Verified 100% non-empty tooltips across {len(buttons_ko)} buttons in Korean.")
+
         print("\n=======================================================")
         print("  ALL PRE-BUILD SMOKE TESTS PASSED CLEANLY (EXIT 0)    ")
         print("=======================================================")

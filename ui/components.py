@@ -86,6 +86,7 @@ class ApiKeyBanner(QFrame):
         self.badge_label.setStyleSheet("font-size: 11px; font-weight: 600; border: none; background: transparent;")
 
         self.change_btn = QPushButton(get_text("btn_change_key", self._lang) or "Change")
+        self.change_btn.setToolTip(get_text("tooltip_change_api_key", self._lang))
         self.change_btn.setFixedHeight(22)
         self.change_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.change_btn.setStyleSheet(
@@ -102,10 +103,12 @@ class ApiKeyBanner(QFrame):
         self.key_input.setVisible(False)
 
         self.save_btn = QPushButton()
+        self.save_btn.setToolTip(get_text("tooltip_change_api_key", self._lang))
         self.save_btn.setVisible(False)
         self.save_btn.clicked.connect(self._on_save_clicked)
 
         self.clear_btn = QPushButton()
+        self.clear_btn.setToolTip(get_text("tooltip_clear_all", self._lang))
         self.clear_btn.setVisible(False)
         self.clear_btn.clicked.connect(self._on_clear_clicked)
 
@@ -165,6 +168,9 @@ class ApiKeyBanner(QFrame):
         """Update localized strings in the API key banner."""
         self._lang = lang
         self.change_btn.setText(get_text("btn_change_key", self._lang) or "Change")
+        self.change_btn.setToolTip(get_text("tooltip_change_api_key", self._lang))
+        self.save_btn.setToolTip(get_text("tooltip_change_api_key", self._lang))
+        self.clear_btn.setToolTip(get_text("tooltip_clear_all", self._lang))
         self._sync_mode()
 
     def _sync_mode(self) -> None:
@@ -217,8 +223,11 @@ class SourceListWidget(QWidget):
 
         btn_row = QHBoxLayout()
         self.select_all_btn = QPushButton(get_text("btn_enable_all", self._lang))
+        self.select_all_btn.setToolTip(get_text("tooltip_enable_all", self._lang))
         self.deselect_all_btn = QPushButton(get_text("btn_disable_all", self._lang))
+        self.deselect_all_btn.setToolTip(get_text("tooltip_disable_all", self._lang))
         self.remove_btn = QPushButton(get_text("btn_remove_selected", self._lang))
+        self.remove_btn.setToolTip(get_text("tooltip_remove_selected", self._lang))
 
         self.select_all_btn.clicked.connect(lambda: self._set_all_check_state(True))
         self.deselect_all_btn.clicked.connect(lambda: self._set_all_check_state(False))
@@ -235,8 +244,11 @@ class SourceListWidget(QWidget):
         """Update button labels for the active language."""
         self._lang = lang
         self.select_all_btn.setText(get_text("btn_enable_all", self._lang))
+        self.select_all_btn.setToolTip(get_text("tooltip_enable_all", self._lang))
         self.deselect_all_btn.setText(get_text("btn_disable_all", self._lang))
+        self.deselect_all_btn.setToolTip(get_text("tooltip_disable_all", self._lang))
         self.remove_btn.setText(get_text("btn_remove_selected", self._lang))
+        self.remove_btn.setToolTip(get_text("tooltip_remove_selected", self._lang))
 
     def refresh_sources(self, documents: List[SourceDocument]) -> None:
         """Rebuild the visual list from the current DocumentCorpus."""
@@ -917,6 +929,7 @@ class SourceInspectorDialog(QDialog):
 
         action_row = QHBoxLayout()
         self.open_url_btn = QPushButton(get_text("inspector_btn_open_url", self._lang))
+        self.open_url_btn.setToolTip(get_text("tooltip_open_url", self._lang))
         self.open_url_btn.setVisible(bool(self._origin_url))
         self.open_url_btn.clicked.connect(self._on_open_url)
         action_row.addWidget(self.open_url_btn)
@@ -949,6 +962,7 @@ class SourceInspectorDialog(QDialog):
         close_row = QHBoxLayout()
         close_row.addStretch(1)
         self.close_btn = QPushButton(get_text("btn_close", self._lang))
+        self.close_btn.setToolTip(get_text("btn_close", self._lang))
         self.close_btn.clicked.connect(self.accept)
         close_row.addWidget(self.close_btn)
         layout.addLayout(close_row)
@@ -1054,6 +1068,7 @@ class AudioPlayerWidget(QFrame):
         transport = QHBoxLayout()
         transport.setSpacing(8)
         self.play_btn = QPushButton("▶")
+        self.play_btn.setToolTip(get_text("tooltip_play_audio", self._lang))
         self.play_btn.setFixedWidth(44)
         self.play_btn.clicked.connect(self.toggle_playback)
 
@@ -1091,6 +1106,7 @@ class AudioPlayerWidget(QFrame):
         self.speed_combo.currentIndexChanged.connect(self._on_speed_changed)
 
         self.save_btn = QPushButton(get_text("btn_save_audio", self._lang))
+        self.save_btn.setToolTip(get_text("tooltip_save_audio", self._lang))
         self.save_btn.clicked.connect(self._on_save_clicked)
 
         footer.addWidget(volume_icon)
@@ -1104,7 +1120,9 @@ class AudioPlayerWidget(QFrame):
 
     def retranslate_ui(self, lang: str = "en") -> None:
         self._lang = lang
+        self.play_btn.setToolTip(get_text("tooltip_play_audio", lang))
         self.save_btn.setText(get_text("btn_save_audio", lang))
+        self.save_btn.setToolTip(get_text("tooltip_save_audio", lang))
         self.hint_label.setText(get_text("audio_player_empty", lang))
 
     def load_file(self, path: str) -> None:
@@ -1247,6 +1265,7 @@ class SpendLedgerDialog(QDialog):
         # Buttons
         btn_layout = QHBoxLayout()
         self.btn_clear = QPushButton("Clear Audit History" if self._lang == "en" else "내역 초기화")
+        self.btn_clear.setToolTip(get_text("tooltip_clear_all", self._lang))
         self.btn_clear.setStyleSheet("background-color: #334155; color: #F1F5F9; border-radius: 4px; padding: 6px 14px;")
         self.btn_clear.clicked.connect(self._on_clear)
         btn_layout.addWidget(self.btn_clear)
@@ -1254,6 +1273,7 @@ class SpendLedgerDialog(QDialog):
         btn_layout.addStretch(1)
 
         self.btn_close = QPushButton("Close" if self._lang == "en" else "닫기")
+        self.btn_close.setToolTip(get_text("btn_close", self._lang))
         self.btn_close.setStyleSheet("background-color: #2563EB; color: #FFFFFF; font-weight: bold; border-radius: 4px; padding: 6px 18px;")
         self.btn_close.clicked.connect(self.accept)
         btn_layout.addWidget(self.btn_close)
@@ -1347,17 +1367,20 @@ class CheckpointManagerDialog(QDialog):
         # Action Buttons
         btn_row = QHBoxLayout()
         self.btn_create = QPushButton(get_text("checkpoint_create", self._lang))
+        self.btn_create.setToolTip(get_text("checkpoint_create", self._lang))
         self.btn_create.setStyleSheet("background-color: #059669; color: #FFFFFF; font-weight: 600; border-radius: 4px; padding: 6px 14px;")
         self.btn_create.clicked.connect(self._on_create_clicked)
         btn_row.addWidget(self.btn_create)
 
         self.btn_restore = QPushButton(get_text("checkpoint_restore", self._lang))
+        self.btn_restore.setToolTip(get_text("checkpoint_restore", self._lang))
         self.btn_restore.setStyleSheet("background-color: #2563EB; color: #FFFFFF; font-weight: 600; border-radius: 4px; padding: 6px 14px;")
         self.btn_restore.setEnabled(False)
         self.btn_restore.clicked.connect(self._on_restore_clicked)
         btn_row.addWidget(self.btn_restore)
 
         self.btn_fork = QPushButton(get_text("checkpoint_fork", self._lang))
+        self.btn_fork.setToolTip(get_text("checkpoint_fork", self._lang))
         self.btn_fork.setStyleSheet("background-color: #7E22CE; color: #FFFFFF; font-weight: 600; border-radius: 4px; padding: 6px 14px;")
         self.btn_fork.setEnabled(False)
         self.btn_fork.clicked.connect(self._on_fork_clicked)
@@ -1366,6 +1389,7 @@ class CheckpointManagerDialog(QDialog):
         btn_row.addStretch(1)
 
         self.btn_close = QPushButton("Close" if self._lang == "en" else "닫기")
+        self.btn_close.setToolTip(get_text("btn_close", self._lang))
         self.btn_close.setStyleSheet("background-color: #334155; color: #F1F5F9; border-radius: 4px; padding: 6px 16px;")
         self.btn_close.clicked.connect(self.reject)
         btn_row.addWidget(self.btn_close)

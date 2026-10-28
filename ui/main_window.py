@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from PyQt6.QtCore import Qt, QThread, QTimer, QUrl
 from PyQt6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut, QTextCursor, QTextOption
 from PyQt6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDockWidget,
@@ -31,6 +32,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSplitter,
+    QTabBar,
     QTabWidget,
     QTextBrowser,
     QTextEdit,
@@ -397,6 +399,16 @@ QSlider::handle:horizontal {
 QDialog {
     background-color: #0B0F19;
 }
+QToolTip {
+    background-color: #0F172A;
+    color: #F8FAFC;
+    border: 1px solid #38BDF8;
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-size: 11px;
+    font-family: 'Segoe UI', 'Malgun Gothic', sans-serif;
+    opacity: 255;
+}
 """
 
 
@@ -475,11 +487,17 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(get_text("app_title", self.current_language))
         self.resize(1540, 920)
-        self.setStyleSheet(self.theme_manager.get_stylesheet())
+        self.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips, True)
+        qss = self.theme_manager.get_stylesheet()
+        self.setStyleSheet(qss)
+        app_inst = QApplication.instance()
+        if app_inst is not None:
+            app_inst.setStyleSheet(qss)
         self.theme_manager.apply_title_bar(self)
 
         self._build_ui()
         self._build_menu()
+        self.retranslate_ui()
         self._refresh_corpus_ui()
         self._update_window_title()
 
@@ -1286,9 +1304,12 @@ class MainWindow(QMainWindow):
         self.audio_desc_label.setText(get_text("audio_studio_desc", lang))
         self.audio_focus_input.setPlaceholderText(get_text("placeholder_audio_directive", lang))
         self.generate_audio_btn.setText(get_text("btn_generate_audio", lang))
+        self.generate_audio_btn.setToolTip(get_text("tooltip_generate_audio", lang))
         self.export_audio_btn.setText(get_text("btn_export_audio", lang))
+        self.export_audio_btn.setToolTip(get_text("tooltip_export_audio_script", lang))
         self.dialogue_renderer.retranslate_ui(lang)
         self.render_audio_btn.setText(get_text("btn_render_audio", lang))
+        self.render_audio_btn.setToolTip(get_text("tooltip_render_audio", lang))
         self.audio_player.retranslate_ui(lang)
 
         # Source Document Inspector Dock
@@ -1298,6 +1319,17 @@ class MainWindow(QMainWindow):
         # Full-Text Search Drawer Dock
         if hasattr(self, "search_dock"):
             self.search_dock.update_language(lang)
+
+        if hasattr(self, "btn_mobile_server"):
+            self.btn_mobile_server.setToolTip(get_text("tooltip_mobile_server", lang))
+        if hasattr(self, "discovery_model_combo"):
+            self.discovery_model_combo.setToolTip(get_text("tooltip_discovery_model", lang))
+        if hasattr(self, "synthesis_model_combo"):
+            self.synthesis_model_combo.setToolTip(get_text("tooltip_synthesis_model", lang))
+        if hasattr(self, "compression_combo"):
+            self.compression_combo.setToolTip(get_text("tooltip_compression_mode", lang))
+        if hasattr(self, "language_combo"):
+            self.language_combo.setToolTip(get_text("tooltip_language_select", lang))
 
         if hasattr(self, "export_bibtex_action"):
             self.export_bibtex_action.setText(get_text("export_bibtex", lang))
@@ -1318,6 +1350,20 @@ class MainWindow(QMainWindow):
         if self.active_worker is None:
             self._set_status(get_text("welcome_step1", lang))
 
+        # Ensure all child input and tab sub-controls have non-empty localized tooltips
+        for le in self.findChildren(QLineEdit):
+            for btn in le.findChildren(QToolButton):
+                btn.setToolTip(get_text("tooltip_clear_field", lang))
+        for tb in self.findChildren(QTabBar):
+            for btn in tb.findChildren(QToolButton):
+                if "Left" in btn.objectName():
+                    btn.setToolTip(get_text("tooltip_scroll_left", lang))
+                else:
+                    btn.setToolTip(get_text("tooltip_scroll_right", lang))
+        if hasattr(self, "menuBar") and self.menuBar():
+            for btn in self.menuBar().findChildren(QToolButton):
+                btn.setToolTip(get_text("tooltip_menu_more", lang))
+
     retranslateUi = retranslate_ui
 
     # --- Original / Translation Toggle Logic ---
@@ -1326,6 +1372,7 @@ class MainWindow(QMainWindow):
         """Update toggle button text dynamically based on view state and active language."""
         key = "btn_show_original" if is_showing_translation else "btn_show_translation"
         button.setText(get_text(key, self.current_language))
+        button.setToolTip(get_text("tooltip_toggle_translation", self.current_language))
 
     def _on_toggle_synthesis_language_view(self) -> None:
         """Toggle the Grounded Synthesis viewer between original and translated buffers."""
@@ -3033,6 +3080,9 @@ class MainWindow(QMainWindow):
     def _on_theme_selected(self, theme_key: str) -> None:
         qss = self.theme_manager.set_theme(theme_key)
         self.setStyleSheet(qss)
+        app_inst = QApplication.instance()
+        if app_inst is not None:
+            app_inst.setStyleSheet(qss)
         self.theme_manager.apply_title_bar(self)
         if hasattr(self, "theme_action_dark"):
             self.theme_action_dark.setChecked(theme_key == "dark")

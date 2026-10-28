@@ -240,8 +240,11 @@ class FollowUpChatDrawer(QWidget):
     def retranslate_ui(self, lang: str = "en") -> None:
         self._lang = lang
         self._refresh_toggle_text()
+        self.toggle_btn.setToolTip(get_text("tooltip_chat_toggle", lang))
         self.clear_btn.setText(get_text("chat_btn_clear", lang))
+        self.clear_btn.setToolTip(get_text("tooltip_chat_clear", lang))
         self.send_btn.setText(get_text("chat_btn_send", lang))
+        self.send_btn.setToolTip(get_text("tooltip_chat_send", lang))
         self.input.setPlaceholderText(get_text("chat_placeholder", lang))
         self.empty_hint.setText(get_text("chat_empty_hint", lang))
         for index in range(self.messages_layout.count()):

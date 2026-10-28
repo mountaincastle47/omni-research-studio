@@ -89,6 +89,7 @@ class SandboxDock(QDockWidget):
 
         btn_row = QHBoxLayout()
         self.btn_run = QPushButton(get_text("btn_run_sandbox", self._lang), self)
+        self.btn_run.setToolTip(get_text("tooltip_run_sandbox", self._lang))
         self.btn_run.setStyleSheet(
             "QPushButton { background-color: #0284C7; color: #FFFFFF; font-weight: 700; "
             "border-radius: 5px; padding: 5px 14px; font-size: 11px; } QPushButton:hover { background-color: #0369A1; }"
@@ -97,6 +98,7 @@ class SandboxDock(QDockWidget):
         btn_row.addWidget(self.btn_run)
 
         self.btn_insert = QPushButton(get_text("btn_insert_plot", self._lang), self)
+        self.btn_insert.setToolTip(get_text("tooltip_insert_plot", self._lang))
         self.btn_insert.setStyleSheet(
             "QPushButton { background-color: #1E293B; color: #38BDF8; border: 1px solid #334155; "
             "border-radius: 5px; padding: 5px 12px; font-size: 11px; } QPushButton:hover { background-color: #334155; }"
@@ -213,5 +215,7 @@ class SandboxDock(QDockWidget):
         self._lang = lang
         self.setWindowTitle(get_text("dock_sandbox_title", lang))
         self.btn_run.setText(get_text("btn_run_sandbox", lang))
+        self.btn_run.setToolTip(get_text("tooltip_run_sandbox", lang))
         self.btn_insert.setText(get_text("btn_insert_plot", lang))
+        self.btn_insert.setToolTip(get_text("tooltip_insert_plot", lang))
         self.plot_title.setText(get_text("sandbox_plot_title", lang))

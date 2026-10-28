@@ -457,6 +457,10 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "Find in report... (Ctrl+F)",
         "ko": "보고서 내 단어 찾기... (Ctrl+F)",
     },
+    "find_in_report_placeholder": {
+        "en": "Find in report... (Ctrl+F)",
+        "ko": "보고서 내 단어 찾기... (Ctrl+F)",
+    },
     "find_prev": {"en": "Previous", "ko": "이전"},
     "find_next": {"en": "Next", "ko": "다음"},
     "find_case_sensitive": {"en": "Match Case", "ko": "대소문자 구분"},
@@ -704,6 +708,134 @@ STRINGS: Dict[str, Dict[str, str]] = {
     "tooltip_filter_entities": {
         "en": "Type to filter nodes by entity name or category (Organization, Concept, etc.).",
         "ko": "엔티티 이름 또는 범주(조직, 개념 등)로 노드를 필터링합니다.",
+    },
+    "tooltip_enable_all": {
+        "en": "Include all corpus documents in synthesis and analysis.",
+        "ko": "모든 코퍼스 문서를 종합 분석에 포함합니다.",
+    },
+    "tooltip_disable_all": {
+        "en": "Exclude all corpus documents from synthesis.",
+        "ko": "모든 문서를 분석 대상에서 일시 제외합니다.",
+    },
+    "tooltip_remove_selected": {
+        "en": "Remove the currently selected document from the corpus.",
+        "ko": "선택한 문서를 코퍼스에서 제거합니다.",
+    },
+    "tooltip_toggle_translation": {
+        "en": "Toggle between the original English report and Korean translation.",
+        "ko": "원문과 번역본 뷰를 상호 전환합니다.",
+    },
+    "tooltip_chat_toggle": {
+        "en": "Expand or collapse the interactive follow-up research drawer.",
+        "ko": "심층 질의응답 및 후속 연구 대화창을 열거나 접습니다.",
+    },
+    "tooltip_chat_clear": {
+        "en": "Clear the entire conversation history in this workspace.",
+        "ko": "현재 워크스페이스의 대화 기록을 초기화합니다.",
+    },
+    "tooltip_chat_send": {
+        "en": "Submit your research question to the grounded synthesis engine.",
+        "ko": "근거 기반 종합 분석 엔진에 후속 질의를 제출합니다.",
+    },
+    "tooltip_generate_audio": {
+        "en": "Generate a dual-host podcast dialogue script from the report.",
+        "ko": "보고서 내용을 기반으로 2인 팟캐스트 대화 대본을 작성합니다.",
+    },
+    "tooltip_export_audio_script": {
+        "en": "Save the dialogue script as a text file (.txt).",
+        "ko": "대화 대본을 텍스트 파일(.txt)로 내보냅니다.",
+    },
+    "tooltip_render_audio": {
+        "en": "Synthesize dialogue audio using the faster-whisper/TTS pipeline.",
+        "ko": "생성된 대본을 고품질 음성 오디오(.mp3)로 렌더링합니다.",
+    },
+    "tooltip_play_audio": {
+        "en": "Play or pause the generated audio briefing.",
+        "ko": "오디오 브리핑을 재생하거나 일시 정지합니다.",
+    },
+    "tooltip_save_audio": {
+        "en": "Save the rendered MP3 audio briefing to disk.",
+        "ko": "렌더링된 MP3 오디오 파일을 저장합니다.",
+    },
+    "tooltip_open_url": {
+        "en": "Open the source document or grounding link in your default web browser.",
+        "ko": "기본 웹 브라우저에서 원본 문서 또는 웹 링크를 엽니다.",
+    },
+    "tooltip_mobile_server": {
+        "en": "Launch the Mobile LAN Live Mirror server to view reports on mobile devices.",
+        "ko": "모바일 기기에서 실시간으로 연구 보고서를 확인하는 로컬 서버를 엽니다.",
+    },
+    "tooltip_change_api_key": {
+        "en": "Configure or update your Google Gemini API key securely in Windows Credential Vault.",
+        "ko": "Windows 보안 자격 증명 관리자에 Gemini API 키를 등록하거나 변경합니다.",
+    },
+    "tooltip_reset_zoom": {
+        "en": "Reset graph view scale and center viewport.",
+        "ko": "그래프 배율을 기본값으로 초기화하고 중앙에 맞춥니다.",
+    },
+    "tooltip_find_close": {
+        "en": "Close the in-page search bar (Escape).",
+        "ko": "보고서 내 단어 찾기 검색창을 닫습니다 (Esc).",
+    },
+    "tooltip_split_close": {
+        "en": "Close the side-by-side split comparison view.",
+        "ko": "좌우 분할 비교 뷰를 닫습니다.",
+    },
+    "tooltip_run_sandbox": {
+        "en": "Execute the Python calculation script in a secure sandbox.",
+        "ko": "보안 샌드박스 환경에서 파이썬 계산 스크립트를 실행합니다.",
+    },
+    "tooltip_insert_plot": {
+        "en": "Insert the generated mathematical plot into the active synthesis report.",
+        "ko": "생성된 수학/통계 그래프를 종합 보고서 본문에 삽입합니다.",
+    },
+    "tooltip_source_prev": {
+        "en": "Navigate to the previous document in the corpus.",
+        "ko": "코퍼스 내 이전 문서로 이동합니다.",
+    },
+    "tooltip_source_next": {
+        "en": "Navigate to the next document in the corpus.",
+        "ko": "코퍼스 내 다음 문서로 이동합니다.",
+    },
+    "tooltip_discovery_model": {
+        "en": "Select the Gemini model utilized for multi-perspective search grounding.",
+        "ko": "다각도 웹 검색 그라운딩에 사용할 Gemini 모델을 선택합니다.",
+    },
+    "tooltip_synthesis_model": {
+        "en": "Select the Gemini model utilized for grounded report synthesis.",
+        "ko": "근거 기반 종합 보고서 작성에 사용할 Gemini 모델을 선택합니다.",
+    },
+    "tooltip_compression_mode": {
+        "en": "Configure context compression mode to manage token limits and throughput.",
+        "ko": "토큰 한도 및 처리 속도 최적화를 위한 컨텍스트 압축 모드를 설정합니다.",
+    },
+    "tooltip_language_select": {
+        "en": "Switch application UI and report translation language.",
+        "ko": "애플리케이션 인터페이스 및 보고서 표시 언어를 전환합니다.",
+    },
+    "tooltip_search_fts": {
+        "en": "Search corpus documents using full-text search index (FTS5).",
+        "ko": "전문 검색 색인(FTS5)을 사용하여 코퍼스 문서를 검색합니다.",
+    },
+    "tooltip_vision_analyze": {
+        "en": "Perform multimodal AI visual inspection and diagram analysis.",
+        "ko": "다중 모달 AI를 통해 시각적 다이어그램 및 이미지 분석을 수행합니다.",
+    },
+    "tooltip_scroll_left": {
+        "en": "Scroll tabs left",
+        "ko": "탭 목록 왼쪽으로 스크롤",
+    },
+    "tooltip_scroll_right": {
+        "en": "Scroll tabs right",
+        "ko": "탭 목록 오른쪽으로 스크롤",
+    },
+    "tooltip_clear_field": {
+        "en": "Clear input field",
+        "ko": "입력 내용 지우기",
+    },
+    "tooltip_menu_more": {
+        "en": "More menu options",
+        "ko": "추가 메뉴 항목",
     },
 }
 

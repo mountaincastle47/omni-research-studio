@@ -119,12 +119,21 @@ class InPageFindBar(QWidget):
 
         self.btn_close = QToolButton(self)
         self.btn_close.setText("✕")
+        self.btn_close.setToolTip(get_text("tooltip_find_close", self._lang))
         self.btn_close.setStyleSheet(
             "QToolButton { background-color: transparent; color: #94A3B8; border: none; font-size: 12px; padding: 4px; } "
             "QToolButton:hover { color: #F1F5F9; }"
         )
         self.btn_close.clicked.connect(self.hide_bar)
         layout.addWidget(self.btn_close)
+
+    def retranslate_ui(self, lang: str = "en") -> None:
+        self._lang = lang
+        self.input_find.setPlaceholderText(get_text("find_in_page_placeholder", lang))
+        self.btn_prev.setToolTip(get_text("find_prev", lang))
+        self.btn_next.setToolTip(get_text("find_next", lang))
+        self.chk_case.setToolTip(get_text("find_case_sensitive", lang))
+        self.btn_close.setToolTip(get_text("tooltip_find_close", lang))
 
     def attach_browser(self, browser: QTextBrowser) -> None:
         self._target_browser = browser
@@ -493,6 +502,7 @@ class WorkspaceReportPane(QWidget):
             btn.setText(get_text("btn_view_original", self.current_language))
         else:
             btn.setText(get_text("btn_view_translation", self.current_language))
+        btn.setToolTip(get_text("tooltip_toggle_translation", self.current_language))
 
     def _render_initial_content(self) -> None:
         welcome_md = (
@@ -518,6 +528,8 @@ class WorkspaceReportPane(QWidget):
         self.inner_tabs.setTabText(4, get_text("tab_knowledge_graph", lang))
         self._update_toggle_btn_label(self.synthesis_toggle_btn, self.synthesis_showing_translation)
         self._update_toggle_btn_label(self.perspective_toggle_btn, self.perspective_showing_translation)
+        if hasattr(self, "find_bar") and hasattr(self.find_bar, "retranslate_ui"):
+            self.find_bar.retranslate_ui(lang)
         self.chat_drawer.retranslate_ui(lang)
         self.causal_graph_viewer.retranslate_ui(lang)
         self.chronology_viewer.retranslate_ui(lang)
@@ -633,7 +645,7 @@ class SplitComparisonWidget(QWidget):
         toolbar.addWidget(self.sync_scroll_chk)
 
         self.btn_close = QPushButton("✕")
-        self.btn_close.setToolTip("Close Split Comparison View")
+        self.btn_close.setToolTip(get_text("tooltip_split_close", self._lang))
         self.btn_close.setStyleSheet("background: transparent; color: #94A3B8; border: none; font-size: 14px; padding: 2px 8px;")
         self.btn_close.clicked.connect(self.close_requested)
         toolbar.addWidget(self.btn_close)
@@ -750,6 +762,11 @@ class SplitComparisonWidget(QWidget):
             self.right_browser.setHtml(build_dark_html(right_text, interactive_citations=True))
         else:
             self.right_browser.setHtml(build_dark_html("*No synthesis generated in comparison tab yet.*"))
+
+    def retranslate_ui(self, lang: str = "en") -> None:
+        self._lang = lang
+        self.sync_scroll_chk.setText(get_text("sync_scroll", lang))
+        self.btn_close.setToolTip(get_text("tooltip_split_close", lang))
 
 
 class ResearchWorkspaceTabs(QTabWidget):
@@ -961,5 +978,7 @@ class ResearchWorkspaceTabs(QTabWidget):
         if hasattr(self, "split_view_btn"):
             self.split_view_btn.setText("◫ " + get_text("menu_split_view", lang))
             self.split_view_btn.setToolTip(get_text("tooltip_split_view", lang))
+        if self._split_widget is not None and hasattr(self._split_widget, "retranslate_ui"):
+            self._split_widget.retranslate_ui(lang)
         for pane in self.get_all_panes():
             pane.retranslate_ui(lang)

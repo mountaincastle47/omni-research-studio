@@ -104,6 +104,7 @@ class SearchDrawerWidget(QWidget):
         search_row.addWidget(self.search_input, stretch=1)
 
         self.btn_search = QPushButton(get_text("action_search_fts", self._lang))
+        self.btn_search.setToolTip(get_text("tooltip_search_fts", self._lang))
         self.btn_search.setStyleSheet(
             "QPushButton { background-color: #1E293B; color: #F1F5F9; border: 1px solid #334155; "
             "border-radius: 6px; padding: 7px 14px; font-weight: 600; font-size: 12px; } "
@@ -139,6 +140,7 @@ class SearchDrawerWidget(QWidget):
         self._lang = lang
         self.search_input.setPlaceholderText(get_text("search_fts_placeholder", self._lang))
         self.btn_search.setText(get_text("action_search_fts", self._lang))
+        self.btn_search.setToolTip(get_text("tooltip_search_fts", self._lang))
 
     def _on_search_text_changed(self, text: str) -> None:
         if len(text.strip()) >= 2:
