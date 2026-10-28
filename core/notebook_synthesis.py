@@ -26,7 +26,7 @@ EPISTEMIC_FRICTION_MANDATE = (
     "- Actively identify empirical discrepancies between official manufacturer/state claims and contrarian/skeptic trial logs or third-party telemetry.\n"
     "- SOURCE AUTHORITY HIERARCHY RULE: Primary empirical data and telemetry ([PRIMARY/EMPIRICAL]) take precedence over secondary reporting ([SECONDARY/SCHOLARLY]). If tertiary commentary ([TERTIARY/COMMENTARY]) contradicts primary trial logs or telemetry, highlight the discrepancy explicitly in the Contested Claims & Empirical Anomalies Matrix.\n"
     "- NEVER smooth over conflicting data into a generic consensus.\n"
-    "- If conflicting figures, dates, failure rates, or doctrine assessments exist, construct a dedicated Markdown table titled '## Contested Claims & Empirical Anomalies / 상충 쟁점 및 실증 불일치 분석':\n"
+    "- If conflicting figures, dates, failure rates, or doctrine assessments exist, construct a dedicated Markdown table titled '## Contested Claims & Empirical Anomalies':\n"
     "  | Parameter / Event | Official / Baseline Claim | Empirical / Contrarian Finding | Technical Divergence Root Cause |\n"
     "- Every cell in this table must be grounded with specific [N:p.X] or [N] citations."
 )
@@ -400,7 +400,7 @@ class NotebookSynthesizer:
             "Focus the graph on structural trade-offs, engineering failure chains, or institutional decision trees with labeled edges.\n\n"
             "8. TEMPORAL SEQUENCE & CHRONOLOGY MANDATE:\n"
             "Include a dedicated chronological milestone table titled:\n"
-            "## Temporal Sequence & Chronology / 주요 개발 및 사건 연대표:\n"
+            "## Temporal Sequence & Chronology:\n"
             "| Date / Period | Milestone / Event | Empirical Outcome | Primary Citation |\n"
             "Every row must capture empirical progression grounded with [N] or [N:p.X] citations.\n\n"
             f"{OUTPUT_LANGUAGE_CONSTRAINT}"

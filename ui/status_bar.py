@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Optional
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtWidgets import (
@@ -58,7 +59,7 @@ class StatusEtaWidget(QWidget):
         layout.addWidget(self.eta_prefix_label)
         layout.addWidget(self.eta_value_label)
 
-    def set_eta(self, eta_seconds: int, is_ready: bool = False) -> None:
+    def set_eta(self, eta_seconds: int, is_ready: bool = False, elapsed_seconds: int = 0) -> None:
         """Update ETA with font-metric sizing for the prefix and jitter-free value formatting."""
         if is_ready:
             self.eta_prefix_label.setText("")
@@ -66,17 +67,33 @@ class StatusEtaWidget(QWidget):
             self.eta_value_label.setText(get_text("eta_ready", self._lang))
             return
 
-        if eta_seconds > 0:
+        if eta_seconds > 1:
             prefix_text = "남은 시간:" if self._lang == "ko" else "ETA:"
             self.eta_prefix_label.setText(prefix_text)
             fm = self.eta_prefix_label.fontMetrics()
             prefix_width = fm.horizontalAdvance(prefix_text) + 4
             self.eta_prefix_label.setFixedWidth(prefix_width)
+            self.eta_value_label.setFixedWidth(55)
             self.eta_value_label.setText(f"~{eta_seconds}s")
+        elif elapsed_seconds > 0:
+            self.set_elapsed(elapsed_seconds)
         else:
             self.eta_prefix_label.setText("")
             self.eta_prefix_label.setFixedWidth(0)
             self.eta_value_label.setText("")
+
+    def set_elapsed(self, elapsed_seconds: int) -> None:
+        """Display dynamic elapsed time counter when ETA drops or becomes indeterminate."""
+        m, s = divmod(max(0, elapsed_seconds), 60)
+        time_str = f"{m}m {s:02d}s" if m > 0 else f"{s}s"
+        prefix_text = "경과:" if self._lang == "ko" else "Elapsed:"
+        self.eta_prefix_label.setText(prefix_text)
+        fm = self.eta_prefix_label.fontMetrics()
+        prefix_width = fm.horizontalAdvance(prefix_text) + 4
+        self.eta_prefix_label.setFixedWidth(prefix_width)
+        val_width = max(55, fm.horizontalAdvance(time_str) + 12)
+        self.eta_value_label.setFixedWidth(val_width)
+        self.eta_value_label.setText(time_str)
 
     def clear(self) -> None:
         """Clear both prefix and value labels."""
@@ -98,6 +115,7 @@ class OmniStatusBar(QWidget):
         super().__init__(parent)
         self._lang = lang
         self._spinner_idx = 0
+        self._task_start_time: Optional[float] = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -159,6 +177,7 @@ class OmniStatusBar(QWidget):
 
     def start_busy(self, initial_text: str = "") -> None:
         """Start animated busy spinner and indeterminate progress animation."""
+        self._task_start_time = time.monotonic()
         self.spinner_label.setText(SPINNER_FRAMES[0])
         self.spinner_label.setVisible(True)
         self.spinner_timer.start()
@@ -181,10 +200,24 @@ class OmniStatusBar(QWidget):
             self.progress_bar.setValue(max(0, min(100, percentage)))
         else:
             self.progress_bar.setRange(0, 0)
-        self.eta_widget.set_eta(eta_seconds, is_ready=is_ready)
+
+        if is_ready or percentage >= 100:
+            self._task_start_time = None
+            self.eta_widget.set_eta(0, is_ready=True)
+            return
+
+        if self._task_start_time is None:
+            self._task_start_time = time.monotonic()
+        elapsed_sec = int(time.monotonic() - self._task_start_time)
+
+        if eta_seconds > 1:
+            self.eta_widget.set_eta(eta_seconds, is_ready=False)
+        else:
+            self.eta_widget.set_eta(0, is_ready=False, elapsed_seconds=elapsed_sec)
 
     def reset_state(self) -> None:
         """Clean state reset on task completion, cancellation, or watchdog timeout."""
+        self._task_start_time = None
         self.spinner_timer.stop()
         self.spinner_label.setText("")
         self.spinner_label.setVisible(False)

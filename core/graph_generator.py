@@ -253,10 +253,11 @@ def render_mermaid_to_svg(
     graph = parse_mermaid_code(mermaid_code)
     if not graph.nodes:
         return (
-            '<svg xmlns="http://www.w3.org/2005/svg" width="600" height="120">'
-            '<rect width="100%" height="100%" fill="#0B0F19"/>'
-            '<text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#94A3B8" font-size="14">'
-            'No valid Mermaid causal graph nodes detected in synthesis report.'
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="120" viewBox="0 0 600 120">\n'
+            '<rect width="100%" height="100%" fill="#0B0F19"/>\n'
+            '<text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#94A3B8" font-size="14">\n'
+            'No valid Mermaid causal graph nodes detected in synthesis report.\n'
             '</text></svg>'
         )
 
@@ -327,7 +328,8 @@ def render_mermaid_to_svg(
 
     # Build SVG XML elements
     svg_parts = [
-        f'<svg xmlns="http://www.w3.org/2005/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{actual_width}" height="{svg_height}" viewBox="0 0 {actual_width} {svg_height}">',
+        '<?xml version="1.0" encoding="utf-8"?>',
+        f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{actual_width}" height="{svg_height}" viewBox="0 0 {actual_width} {svg_height}">',
         '<defs>',
         '  <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">',
         '    <polygon points="0 0, 10 3.5, 0 7" fill="#38BDF8"/>',

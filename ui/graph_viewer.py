@@ -740,38 +740,49 @@ class CausalGraphWidget(QWidget):
             QDesktopServices.openUrl(url)
 
     def _on_export_svg(self) -> None:
-        file_path, _ = QFileDialog.getSaveFileName(
+        file_path, selected_filter = QFileDialog.getSaveFileName(
             self,
-            "Save Causal Graph SVG" if self._lang == "en" else "인과 다이어그램 SVG 저장",
+            "Save Causal Graph" if self._lang == "en" else "인과 다이어그램 저장",
             "causal_graph.svg",
-            "Scalable Vector Graphics (*.svg)",
+            "Scalable Vector Graphics (*.svg);;High-Resolution PNG (*.png)",
         )
         if file_path:
-            self.export_to_svg(file_path)
+            if file_path.lower().endswith(".png") or "PNG" in selected_filter:
+                self.export_image(file_path)
+            else:
+                self.export_to_svg(file_path)
 
     def export_to_svg(self, file_path: str | Path) -> Path:
-        """Export causal graph to scalable vector SVG with accurate coordinate scaling."""
+        """Export causal graph to standard-compliant scalable vector SVG with accurate coordinate scaling."""
         target = Path(file_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         # 1. Prefer rendered Mermaid SVG if available and valid XML
         if self._current_svg and "<svg" in self._current_svg:
-            target.write_text(self._current_svg, encoding="utf-8")
+            svg_content = self._current_svg
+            if not svg_content.lstrip().startswith("<?xml"):
+                svg_content = '<?xml version="1.0" encoding="utf-8"?>\n' + svg_content
+            svg_content = svg_content.replace('xmlns="http://www.w3.org/2005/svg"', 'xmlns="http://www.w3.org/2000/svg"')
+            target.write_text(svg_content, encoding="utf-8")
             return target
         if self._raw_mermaid:
             rendered = render_mermaid_to_svg(self._raw_mermaid)
             if rendered and "<svg" in rendered:
+                if not rendered.lstrip().startswith("<?xml"):
+                    rendered = '<?xml version="1.0" encoding="utf-8"?>\n' + rendered
+                rendered = rendered.replace('xmlns="http://www.w3.org/2005/svg"', 'xmlns="http://www.w3.org/2000/svg"')
                 self._current_svg = rendered
                 target.write_text(rendered, encoding="utf-8")
                 return target
 
         # 2. Render from QGraphicsScene using QSvgGenerator
+        rect = self.scene.itemsBoundingRect().adjusted(-40, -40, 40, 40)
+        if rect.isNull() or rect.isEmpty():
+            rect = QRectF(0, 0, 800, 600)
+
         try:
             from PyQt6.QtSvg import QSvgGenerator
             generator = QSvgGenerator()
             generator.setFileName(str(target))
-            rect = self.scene.itemsBoundingRect().adjusted(-30, -30, 30, 30)
-            if rect.isNull() or rect.isEmpty():
-                rect = QRectF(0, 0, 800, 600)
             generator.setSize(rect.size().toSize())
             generator.setViewBox(rect)
             generator.setTitle("Causal Graph")
@@ -780,14 +791,53 @@ class CausalGraphWidget(QWidget):
             painter = QPainter(generator)
             self.scene.render(painter, target=rect, source=rect)
             painter.end()
+            del painter
+            del generator
+
+            if target.exists():
+                svg_txt = target.read_text(encoding="utf-8", errors="replace")
+                svg_txt = re.sub(r'xmlns="http://www\.w3\.org/2005/svg"', 'xmlns="http://www.w3.org/2000/svg"', svg_txt)
+                if not svg_txt.lstrip().startswith("<?xml"):
+                    svg_txt = '<?xml version="1.0" encoding="utf-8"?>\n' + svg_txt
+                if "viewBox=" not in svg_txt:
+                    svg_txt = svg_txt.replace("<svg", f'<svg viewBox="{int(rect.x())} {int(rect.y())} {int(rect.width())} {int(rect.height())}"', 1)
+                svg_txt = re.sub(r'width="[\d.]+mm"', f'width="{int(rect.width())}px"', svg_txt)
+                svg_txt = re.sub(r'height="[\d.]+mm"', f'height="{int(rect.height())}px"', svg_txt)
+                target.write_text(svg_txt, encoding="utf-8")
         except Exception:
             xml_fallback = (
-                '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">\n'
+                '<?xml version="1.0" encoding="utf-8"?>\n'
+                f'<svg xmlns="http://www.w3.org/2000/svg" width="{int(rect.width())}px" height="{int(rect.height())}px" '
+                f'viewBox="{int(rect.x())} {int(rect.y())} {int(rect.width())} {int(rect.height())}">\n'
                 '<rect width="100%" height="100%" fill="#070A10"/>\n'
                 '<text x="50%" y="50%" fill="#94A3B8" font-size="16" text-anchor="middle">Causal Graph</text>\n'
                 '</svg>'
             )
             target.write_text(xml_fallback, encoding="utf-8")
+        return target
+
+    def export_image(self, file_path: str | Path, scale: float = 3.0) -> Path:
+        """Render razor-sharp high-resolution (4K/300 DPI equivalent) raster image cropped to scene."""
+        from PyQt6.QtGui import QImage
+        target = Path(file_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        rect = self.scene.itemsBoundingRect().adjusted(-40, -40, 40, 40)
+        if rect.isNull() or rect.isEmpty():
+            rect = QRectF(0, 0, 1920, 1080)
+        w = max(3840, int(rect.width() * scale))
+        h = max(2160, int(rect.height() * scale))
+        image = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor("#070A10"))
+        painter = QPainter(image)
+        painter.setRenderHints(
+            QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.TextAntialiasing
+            | QPainter.RenderHint.SmoothPixmapTransform
+        )
+        target_rect = QRectF(0, 0, float(w), float(h))
+        self.scene.render(painter, target=target_rect, source=rect)
+        painter.end()
+        image.save(str(target), "PNG")
         return target
 
     def retranslate_ui(self, lang: str) -> None:

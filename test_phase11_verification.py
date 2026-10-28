@@ -63,7 +63,7 @@ class TestPhase11AutonomousMastery(unittest.TestCase):
 ## Core Findings
 Baseline engine specs indicate stable chamber pressure.
 
-## Contested Claims & Empirical Anomalies / 상충 쟁점 및 실증 불일치 분석
+## Contested Claims & Empirical Anomalies
 | Parameter / Event | Official / Baseline Claim | Empirical / Contrarian Finding | Technical Divergence Root Cause |
 | :--- | :--- | :--- | :--- |
 | Specific Impulse (Isp) | 382 sec vacuum [1] | 361 sec in static fire logs [2] | Combustion instability at 85% throttle |

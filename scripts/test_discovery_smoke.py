@@ -8,6 +8,7 @@ health and prevent thread lock, serialization, or timeout regressions before com
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 import traceback
@@ -125,7 +126,7 @@ def run_smoke_test() -> int:
 
         mock_contested_report = (
             "# Synthesis Report with Contested Claims\n\n"
-            "## Contested Claims & Empirical Anomalies / 상충 쟁점 및 실증 불일치 분석\n"
+            "## Contested Claims & Empirical Anomalies\n"
             "| Parameter / Event | Official / Baseline Claim | Empirical / Contrarian Finding | Technical Divergence Root Cause | Citations |\n"
             "| :--- | :--- | :--- | :--- | :--- |\n"
             "| Event Loop Latency | 5 microseconds | 45 microseconds under load | Kernel epoll context switch | [1] |\n"
@@ -868,9 +869,13 @@ def run_smoke_test() -> int:
                 raise RuntimeError("Markdown export was empty or missing metadata header!")
 
             # 16.2 HTML Export Verification
+            raw_prompt_test = "Analyze aerodynamic stability and control surface flutter of forward-swept wings."
+            meta_payload["raw_prompt"] = raw_prompt_test
+            meta_payload["query"] = raw_prompt_test
+
             save_html_report(
                 output_path=html_path,
-                title="High-Performance Concurrency Research",
+                title=raw_prompt_test,
                 report_markdown=synth_markdown,
                 documents=test_docs,
                 model_name=meta_payload["model_name"],
@@ -887,12 +892,17 @@ def run_smoke_test() -> int:
                 raise RuntimeError("HTML export contains unpopulated '—' metadata placeholders!")
             if meta_payload["model_name"] not in html_content:
                 raise RuntimeError(f"Expected model name '{meta_payload['model_name']}' in HTML export!")
+            # Assertion 3: header.cover h1 must not contain the raw input prompt
+            if f"<h1>{raw_prompt_test}</h1>" in html_content:
+                raise RuntimeError("HTML export placed raw input prompt directly into header.cover h1!")
+            if "<details class=\"prompt-card\"" not in html_content or raw_prompt_test not in html_content:
+                raise RuntimeError("HTML export missing collapsible prompt card for raw query!")
 
             # 16.3 PDF Export Verification
             pdf_html = build_pdf_html(
                 markdown_text=synth_markdown,
                 documents=test_docs,
-                title="High-Performance Concurrency Research",
+                title=raw_prompt_test,
                 model_name=meta_payload["model_name"],
                 audit=meta_payload["audit"],
                 metadata=meta_payload,
@@ -904,7 +914,7 @@ def run_smoke_test() -> int:
                 raise RuntimeError(f"Expected model name '{meta_payload['model_name']}' in PDF HTML!")
             export_pdf_report(
                 output_path=pdf_path,
-                title="High-Performance Concurrency Research",
+                title=raw_prompt_test,
                 report_markdown=synth_markdown,
                 documents=test_docs,
                 model_name=meta_payload["model_name"],
@@ -915,27 +925,92 @@ def run_smoke_test() -> int:
             if not pdf_path.exists() or pdf_path.stat().st_size < 500:
                 raise RuntimeError("PDF export file was not generated or is too small!")
 
-            # 16.4 Graph Vector SVG Export Verification
+            # 16.4 Graph Vector SVG & Raster Export Verification
             causal_widget.export_to_svg(causal_svg_path)
             if not causal_svg_path.exists() or causal_svg_path.stat().st_size < 50:
                 raise RuntimeError("Causal Graph SVG export file was not created or is empty!")
-            c_svg_content = causal_svg_path.read_text(encoding="utf-8")
-            if "<svg" not in c_svg_content or "</svg>" not in c_svg_content:
-                raise RuntimeError("Causal Graph SVG export does not contain valid XML SVG!")
 
             kg_widget = KnowledgeGraphWidget(lang="en")
             kg_widget.set_documents(test_docs)
             kg_widget.export_to_svg(kg_svg_path)
             if not kg_svg_path.exists() or kg_svg_path.stat().st_size < 50:
                 raise RuntimeError("Knowledge Graph SVG export file was not created or is empty!")
-            kg_svg_content = kg_svg_path.read_text(encoding="utf-8")
-            if "<svg" not in kg_svg_content or "</svg>" not in kg_svg_content:
-                raise RuntimeError("Knowledge Graph SVG export does not contain valid XML SVG!")
+
+            # Assertion 2: Verify XML prologue, standard xmlns, and viewBox
+            for svg_path in (causal_svg_path, kg_svg_path):
+                svg_txt = svg_path.read_text(encoding="utf-8")
+                if not svg_txt.lstrip().startswith("<?xml"):
+                    raise RuntimeError(f"{svg_path.name} missing XML prolog <?xml ...")
+                if 'xmlns="http://www.w3.org/2000/svg"' not in svg_txt:
+                    raise RuntimeError(f"{svg_path.name} missing standard xmlns http://www.w3.org/2000/svg")
+                if "viewBox=" not in svg_txt:
+                    raise RuntimeError(f"{svg_path.name} missing viewBox attribute")
+                if re.search(r'width="[\d.]+mm"', svg_txt):
+                    raise RuntimeError(f"{svg_path.name} contains invalid millimeter width")
+
+            # High-res raster image exports
+            causal_png_path = export_dir / "causal_graph.png"
+            kg_png_path = export_dir / "knowledge_graph.png"
+            causal_widget.export_image(causal_png_path)
+            kg_widget.export_image(kg_png_path)
+            if not causal_png_path.exists() or causal_png_path.stat().st_size < 1000:
+                raise RuntimeError("Causal Graph PNG export was not created or is too small!")
+            if not kg_png_path.exists() or kg_png_path.stat().st_size < 1000:
+                raise RuntimeError("Knowledge Graph PNG export was not created or is too small!")
+
+            # 16.5 Knowledge Graph Semantic Filtering Verification
+            from core.knowledge_graph import KnowledgeGraphEngine
+            kg_test_engine = KnowledgeGraphEngine()
+            test_corpus_snippet = (
+                "In October 1967, NASA established the Apollo Program to land humans on the Moon. "
+                "While West Germany operated the Leopard 2 tank, Hence Germany adopted 120mm Rheinmetall cannons. "
+                "Inconel 718 was incorporated into rocket combustion chambers. The Fixed timeline was challenging. "
+                "1981 marked the orbital launch of the Space Shuttle."
+            )
+            ents, rels = kg_test_engine._heuristic_extract(test_corpus_snippet, cite_id=1)
+            ent_names = [e["name"] for e in ents]
+
+            # Assertion 1.1: 0 standalone date strings
+            date_entities = [n for n in ent_names if re.match(r"^\d{4}$", n) or "october" in n.lower()]
+            if date_entities:
+                raise RuntimeError(f"Knowledge Graph extracted standalone dates: {date_entities}")
+
+            # Assertion 1.2: 0 transition words / fragments
+            transition_entities = [n for n in ent_names if any(w in n.lower() for w in ["while", "hence", "the fixed"])]
+            if transition_entities:
+                raise RuntimeError(f"Knowledge Graph extracted sentence transitions: {transition_entities}")
+
+            # Assertion 1.3: 0 'associated_with' relations
+            banned_relations = [r for r in rels if r.get("relation") in ("associated_with", "associated with")]
+            if banned_relations:
+                raise RuntimeError(f"Knowledge Graph contained generic 'associated_with' relations: {banned_relations}")
+
+            # 16.6 Pure Locale English Section Headings Verification
+            from core.notebook_synthesis import EPISTEMIC_FRICTION_MANDATE
+            if "상충 쟁점" in EPISTEMIC_FRICTION_MANDATE or "연대표" in EPISTEMIC_FRICTION_MANDATE:
+                raise RuntimeError("English synthesis prompt mandate contains Korean slash-delimited headers!")
+            if "Contested Claims & Empirical Anomalies /" in synth_markdown:
+                raise RuntimeError("English synthesis report contains dual-language slash-delimited heading!")
+
+            # 16.7 Epistemic Radar Tooltips Verification
+            from ui.balance_radar import EpistemicBalanceWidget
+            radar_en = EpistemicBalanceWidget(lang="en")
+            radar_ko = EpistemicBalanceWidget(lang="ko")
+            for r in (radar_en, radar_ko):
+                for ax in ("authority", "linguistic", "dispersion"):
+                    tip = r.get_axis_tooltip(ax)
+                    if not tip or len(tip) < 10:
+                        raise RuntimeError(f"Radar axis {ax} in lang={r._lang} has empty tooltip!")
+                if not r.canvas.toolTip() or len(r.canvas.toolTip()) < 20:
+                    raise RuntimeError(f"Radar canvas in lang={r._lang} has empty tooltip!")
 
         print("   -> Markdown export verified with valid structure and model metadata.")
-        print(f"   -> HTML export verified with populated metadata (Model: {meta_payload['model_name']}).")
+        print(f"   -> HTML export verified with populated metadata and clean cover title (raw prompt in collapsible card).")
         print("   -> PDF export verified with populated metadata and vector compilation.")
-        print("   -> Causal Graph and Knowledge Graph SVG vector exports verified.")
+        print("   -> Causal Graph and Knowledge Graph valid SVG and 4K raster PNG exports verified.")
+        print("   -> Knowledge Graph semantic extraction verified (0 dates, 0 transitions, 0 'associated_with').")
+        print("   -> English synthesis verified with 0 Korean slash-delimited section headings.")
+        print("   -> Epistemic Radar verified with non-empty localized axis and canvas tooltips.")
 
         print("\n=======================================================")
         print("  ALL PRE-BUILD SMOKE TESTS PASSED CLEANLY (EXIT 0)    ")

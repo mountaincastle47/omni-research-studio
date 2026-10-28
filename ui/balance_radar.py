@@ -13,6 +13,19 @@ from core.citation_audit import CitationAudit
 from core.document_loader import SourceDocument
 from core.i18n import get_text
 
+AXIS_EXPLANATIONS = {
+    "en": {
+        "authority": "Authority Ratio: Proportion of primary empirical evidence (academic research, flight logs, official specifications) vs secondary/tertiary reporting.",
+        "linguistic": "Global Diversity: Distribution and linguistic variety of cross-lingual international sources preventing regional mono-lingual bias.",
+        "dispersion": "Perspective Spread: Diversity of analytical viewpoints (Systems, Empirical, Contrarian, Economic) synthesized in the corpus.",
+    },
+    "ko": {
+        "authority": "1차 문헌 비율: 2차/3차 해설 대비 학술 논문, 공식 시험 비행/시험 데이터, 1차 기술 규격서 등 실증적 1차 자료의 비중입니다.",
+        "linguistic": "다국어 다원성: 단일 언어 편향을 방지하는 다국어 교차 검증 수준(영어, 한국어, 독어, 노어, 일어 등)입니다.",
+        "dispersion": "시각 분산도: 시스템 엔지니어링, 실증/실험, 회의론/비판, 경제성 등 다각적 분석 관점의 분산도입니다.",
+    },
+}
+
 
 class EpistemicBalanceWidget(QWidget):
     """
@@ -33,6 +46,7 @@ class EpistemicBalanceWidget(QWidget):
 
         self.warning_text: str = ""
         self._build_ui()
+        self._update_tooltips()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -60,6 +74,19 @@ class EpistemicBalanceWidget(QWidget):
         )
         layout.addWidget(self.warning_banner)
         self._update_warning_banner()
+
+    def _update_tooltips(self) -> None:
+        exps = AXIS_EXPLANATIONS.get(self._lang, AXIS_EXPLANATIONS["en"])
+        overview = f"• {exps['authority']}\n• {exps['linguistic']}\n• {exps['dispersion']}"
+        self.setToolTip(overview)
+        self.title_label.setToolTip(overview)
+        if hasattr(self, "canvas"):
+            self.canvas.setToolTip(overview)
+
+    def get_axis_tooltip(self, axis_name: str) -> str:
+        exps = AXIS_EXPLANATIONS.get(self._lang, AXIS_EXPLANATIONS["en"])
+        key = "authority" if ("author" in axis_name.lower() or "1차" in axis_name) else ("linguistic" if ("ling" in axis_name.lower() or "global" in axis_name.lower() or "다국어" in axis_name) else "dispersion")
+        return exps.get(key, "")
 
     def calculate_balance(
         self,
@@ -152,6 +179,7 @@ class EpistemicBalanceWidget(QWidget):
         self._lang = lang
         self.title_label.setText(get_text("epistemic_radar_title", lang))
         self._update_warning_banner()
+        self._update_tooltips()
         self.canvas.update()
 
 
@@ -161,6 +189,30 @@ class _RadarCanvas(QWidget):
     def __init__(self, parent: EpistemicBalanceWidget) -> None:
         super().__init__(parent)
         self._parent_widget = parent
+        self.setMouseTracking(True)
+        self._top_rect = QRectF()
+        self._bl_rect = QRectF()
+        self._br_rect = QRectF()
+
+    def get_axis_tooltip(self, axis_name: str) -> str:
+        lang = self._parent_widget._lang
+        exps = AXIS_EXPLANATIONS.get(lang, AXIS_EXPLANATIONS["en"])
+        key = "authority" if ("author" in axis_name.lower() or "1차" in axis_name) else ("linguistic" if ("ling" in axis_name.lower() or "global" in axis_name.lower() or "다국어" in axis_name) else "dispersion")
+        return exps.get(key, "")
+
+    def mouseMoveEvent(self, event: Any) -> None:
+        pos = event.position() if hasattr(event, "position") else event.pos()
+        lang = self._parent_widget._lang
+        exps = AXIS_EXPLANATIONS.get(lang, AXIS_EXPLANATIONS["en"])
+        if hasattr(self, "_top_rect") and self._top_rect.contains(pos):
+            self.setToolTip(exps["authority"])
+        elif hasattr(self, "_bl_rect") and self._bl_rect.contains(pos):
+            self.setToolTip(exps["linguistic"])
+        elif hasattr(self, "_br_rect") and self._br_rect.contains(pos):
+            self.setToolTip(exps["dispersion"])
+        else:
+            self.setToolTip(f"• {exps['authority']}\n• {exps['linguistic']}\n• {exps['dispersion']}")
+        super().mouseMoveEvent(event)
 
     def paintEvent(self, event: Any) -> None:
         painter = QPainter(self)
@@ -234,13 +286,13 @@ class _RadarCanvas(QWidget):
         painter.setPen(QColor("#94A3B8"))
 
         # Top vertex: Center above point
-        top_rect = QRectF(center_x - 80, center_y - radius - 44, 160, 40)
-        painter.drawText(top_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, labels[0])
+        self._top_rect = QRectF(center_x - 80, center_y - radius - 44, 160, 40)
+        painter.drawText(self._top_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, labels[0])
 
         # Bottom-Left vertex ("Global Diversity" / "다국어 다원성"): Anchor outside-left with right alignment
-        bl_rect = QRectF(center_x - radius * 0.866 - 145, center_y + radius * 0.5 - 12, 135, 44)
-        painter.drawText(bl_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, labels[1])
+        self._bl_rect = QRectF(center_x - radius * 0.866 - 145, center_y + radius * 0.5 - 12, 135, 44)
+        painter.drawText(self._bl_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, labels[1])
 
         # Bottom-Right vertex ("Perspective Spread" / "시각 분산도"): Anchor outside-right with left alignment
-        br_rect = QRectF(center_x + radius * 0.866 + 10, center_y + radius * 0.5 - 12, 135, 44)
-        painter.drawText(br_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, labels[2])
+        self._br_rect = QRectF(center_x + radius * 0.866 + 10, center_y + radius * 0.5 - 12, 135, 44)
+        painter.drawText(self._br_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, labels[2])

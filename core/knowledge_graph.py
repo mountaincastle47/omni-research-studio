@@ -30,6 +30,26 @@ ENTITY_CATEGORIES = {
 
 # Standard bilingual technical relation vocabulary
 KG_RELATION_TRANSLATIONS: Dict[str, str] = {
+    "developed_by": "개발됨",
+    "developed by": "개발됨",
+    "tested_at": "시험됨",
+    "tested at": "시험됨",
+    "failed_due_to": "실패 원인임",
+    "failed due to": "실패 원인임",
+    "superseded_by": "대체됨",
+    "superseded by": "대체됨",
+    "incorporates": "통합/적용함",
+    "competes_with": "경쟁함",
+    "competes with": "경쟁함",
+    "procured_by": "도입/조달됨",
+    "procured by": "도입/조달됨",
+    "evaluated_by": "평가됨",
+    "evaluated by": "평가됨",
+    "evaluates": "평가함",
+    "complies_with": "준수함",
+    "complies with": "준수함",
+    "operated_by": "운용됨",
+    "operated by": "운용됨",
     "associated_with": "연관됨",
     "associated with": "연관됨",
     "identifies": "식별함",
@@ -81,7 +101,6 @@ KG_RELATION_TRANSLATIONS: Dict[str, str] = {
     "mitigates": "완화함",
     "escalates": "악화시킴",
     "results_in": "결과로 이어짐",
-    "competes_with": "경쟁함",
     "supports": "지원함",
     "supported_by": "지원받음",
     "replaces": "대체함",
@@ -93,27 +112,116 @@ KG_RELATION_TRANSLATIONS: Dict[str, str] = {
 
 KG_RELATION_REVERSE: Dict[str, str] = {v: k for k, v in KG_RELATION_TRANSLATIONS.items()}
 
+DISALLOWED_START_WORDS = {
+    "while", "hence", "therefore", "furthermore", "however", "although", "the", "a", "an",
+    "this", "that", "these", "those", "when", "where", "because", "since", "instead",
+    "during", "after", "before", "in", "on", "at", "by", "for", "with", "about",
+    "against", "between", "into", "through", "above", "below", "to", "from",
+    "up", "down", "out", "off", "over", "under", "again", "further", "then",
+    "once", "here", "there", "all", "any", "both", "each", "few", "more", "most",
+    "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so",
+    "than", "too", "very", "its", "their", "our", "my", "your", "his", "her",
+    "fixed", "table", "figure", "section", "chapter", "source", "document",
+}
+
+_MONTHS_STR = "january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec"
+_DATE_PATTERN = re.compile(
+    rf"^(?:(?:\d{{1,4}}s?)|(?:(?:{_MONTHS_STR})\s+\d{{1,4}})|(?:\d{{1,2}}\s+(?:{_MONTHS_STR})(?:\s+\d{{2,4}})?)|(?:\d{{1,2}}/\d{{1,2}}(?:/\d{{2,4}})?)|(?:(?:early|mid|late)[-\s]\d{{4}}s?))$",
+    re.IGNORECASE,
+)
+_MEASUREMENT_PATTERN = re.compile(
+    r"^\d+(?:\.\d+)?\s*(?:km|m|cm|mm|kg|g|lb|lbs|mph|km/h|knots|kw|mw|gw|ghz|mhz|hz|ms|s|sec|min|hr|hrs|%|percent|deg|c|f|k)$",
+    re.IGNORECASE,
+)
+
+
+def sanitize_and_validate_entity(name: str) -> Optional[str]:
+    """Validate and clean candidate entity name, strictly filtering out dates, fragments, and stopwords."""
+    if not name:
+        return None
+    clean = name.strip().strip("\"'“”‘’`*#_[]():;,.")
+    if len(clean) < 2:
+        return None
+    # 1. Reject standalone years/dates
+    if _DATE_PATTERN.match(clean) or re.match(r"^(?:19|20)\d{2}(?:s)?$", clean):
+        return None
+    # 2. Reject pure numbers or measurements
+    if clean.isdigit() or _MEASUREMENT_PATTERN.match(clean):
+        return None
+    # 3. Check for sentence starter words or transitions
+    tokens = clean.split()
+    if not tokens:
+        return None
+    first_token_lower = tokens[0].lower()
+    if first_token_lower in DISALLOWED_START_WORDS:
+        # If it starts with an article, strip it if remainder is valid
+        if len(tokens) >= 2 and first_token_lower in ("the", "a", "an"):
+            candidate = " ".join(tokens[1:]).strip()
+            if len(candidate) >= 3 and not candidate.lower().startswith(tuple(DISALLOWED_START_WORDS)):
+                return candidate
+        return None
+    # 4. Reject common non-entity phrases
+    lower_full = clean.lower()
+    if any(phrase in lower_full for phrase in [
+        "the following", "in order to", "according to", "as shown", "table of", "based on",
+        "for example", "et al", "figure ", "section ", "chapter ", "page "
+    ]):
+        return None
+    return clean
+
+
+def infer_semantic_relation(src_category: str, dst_category: str) -> str:
+    """Infer typed domain predicate from entity categories, strictly avoiding 'associated_with'."""
+    pair = (src_category, dst_category)
+    cat_rules = {
+        ("Program", "Organization"): "developed_by",
+        ("Program", "Standard"): "implements",
+        ("Program", "Material"): "incorporates",
+        ("Organization", "Program"): "procured_by",
+        ("Key Figure", "Program"): "developed_by",
+        ("Program", "Key Figure"): "led_by",
+        ("Standard", "Program"): "regulates",
+        ("Material", "Program"): "incorporates",
+        ("Concept", "Program"): "enables",
+        ("Program", "Concept"): "implements",
+        ("Organization", "Standard"): "defines",
+        ("Concept", "Concept"): "influences",
+        ("Program", "Program"): "competes_with",
+        ("Organization", "Organization"): "collaborates_with",
+    }
+    return cat_rules.get(pair, "enables")
+
 
 def localize_kg_relation(relation: str, lang: str = "en") -> str:
     """Return localized relation label (e.g. Korean for 'ko', English for 'en')."""
     if not relation:
         return ""
     clean = relation.strip()
-    norm_key = clean.lower().replace("-", "_")
+    norm_key = clean.lower().replace("-", "_").replace(" ", "_")
     if lang == "ko":
         return KG_RELATION_TRANSLATIONS.get(norm_key) or KG_RELATION_TRANSLATIONS.get(clean.lower()) or clean.replace("_", " ")
     else:
         return KG_RELATION_REVERSE.get(clean) or clean.replace("_", " ")
 
+
 ENTITY_EXTRACTION_PROMPT = """You are an Expert Technical Knowledge Graph Extractor.
 Extract the key technical entities and their explicit relationships from the document excerpt below.
-Categorize each entity strictly into one of:
+
+STRICT CATEGORIES (Choose strictly from these 6):
 - Organization (e.g., NASA, DARPA, Lockheed Martin, TSMC, OpenAI)
 - Program (e.g., Apollo, Starship, F-35, GPT-4, ITER)
 - Key Figure (e.g., von Braun, Oppenheimer, Elon Musk, Jensen Huang)
 - Standard (e.g., IEEE-802.11, MIL-STD-810H, ISO-9001, DO-178C)
 - Material (e.g., Inconel 718, Silicon Carbide, Gallium Nitride, Carbon Fiber)
 - Concept (e.g., Quantum Entanglement, Thermal Throttling, Zero-Knowledge Proof)
+
+CRITICAL NEGATIVE EXTRACTION RULES:
+- NEVER extract standalone dates, years, or decades (e.g., "1981", "October 1967", "1990s") as entity nodes. Chronology belongs in the timeline table, NOT as entities.
+- NEVER extract sentence fragments, clauses, or transition phrases (e.g., "While West Germany", "The Fixed", "Hence Germany", "Furthermore").
+- NEVER extract pure numbers, percentages, or measurements (e.g., "500 km", "120 mm", "30%").
+- STRICTLY FORBID generic fallback relations: DO NOT use "associated_with", "connected_to", or "related_to".
+- You MUST use specific, typed domain predicates such as:
+  `developed_by`, `tested_at`, `failed_due_to`, `superseded_by`, `incorporates`, `competes_with`, `procured_by`, `enables`, `causes`, `mitigates`, `depends_on`, `regulates`, `implements`, `evaluates`.
 
 Format output strictly as valid JSON matching this schema:
 {{
@@ -123,9 +231,9 @@ Format output strictly as valid JSON matching this schema:
   ],
   "relations": [
     {{
-      "source": "NASA",
-      "target": "Artemis",
-      "relation": "leads",
+      "source": "Artemis",
+      "target": "NASA",
+      "relation": "developed_by",
       "premise": "NASA directs the multinational Artemis lunar program"
     }}
   ]
@@ -219,11 +327,11 @@ class KnowledgeGraphEngine:
         description: str = "",
         cite_id: Optional[int] = None,
     ) -> str:
-        """Add or update an entity node in the graph."""
-        clean_name = name.strip()
-        node_id = clean_name.lower()
-        if not node_id:
+        """Add or update an entity node in the graph with strict validation."""
+        clean_name = sanitize_and_validate_entity(name)
+        if not clean_name:
             return ""
+        node_id = clean_name.lower()
 
         if self.graph.has_node(node_id):
             node_data = self.graph.nodes[node_id]
@@ -251,17 +359,23 @@ class KnowledgeGraphEngine:
         premise: str = "",
         cite_id: Optional[int] = None,
     ) -> bool:
-        """Add a directed relationship between two entities."""
+        """Add a directed relationship between two entities, upgrading generic placeholder verbs."""
         src_id = self.add_entity(source_name, cite_id=cite_id)
         dst_id = self.add_entity(target_name, cite_id=cite_id)
 
         if not src_id or not dst_id or src_id == dst_id:
             return False
 
+        clean_rel = (relation or "").strip().lower().replace(" ", "_").replace("-", "_")
+        if not clean_rel or clean_rel in ("associated_with", "connected_to", "related_to", "unknown", ""):
+            src_cat = self.graph.nodes[src_id].get("category", "Concept")
+            dst_cat = self.graph.nodes[dst_id].get("category", "Concept")
+            clean_rel = infer_semantic_relation(src_cat, dst_cat)
+
         self.graph.add_edge(
             src_id,
             dst_id,
-            relation=relation.strip() or "related_to",
+            relation=clean_rel,
             premise=premise.strip(),
             cite_id=cite_id,
         )
@@ -301,26 +415,51 @@ class KnowledgeGraphEngine:
                 )
                 raw_json = getattr(response, "text", "") or "{}"
                 data = clean_and_parse_json(raw_json)
-                entities = data.get("entities", [])
-                relations = data.get("relations", [])
+                raw_entities = data.get("entities", [])
+                raw_relations = data.get("relations", [])
 
-                if entities:
-                    for e in entities:
+                valid_entities: List[Dict[str, Any]] = []
+                for e in raw_entities:
+                    c_name = sanitize_and_validate_entity(e.get("name", ""))
+                    if c_name:
                         self.add_entity(
-                            name=e.get("name", ""),
+                            name=c_name,
                             category=e.get("category", "Concept"),
                             description=e.get("description", ""),
                             cite_id=cite_id,
                         )
-                    for r in relations:
+                        valid_entities.append({
+                            "name": c_name,
+                            "category": e.get("category", "Concept"),
+                            "description": e.get("description", ""),
+                        })
+
+                valid_relations: List[Dict[str, Any]] = []
+                for r in raw_relations:
+                    src = sanitize_and_validate_entity(r.get("source", ""))
+                    tgt = sanitize_and_validate_entity(r.get("target", ""))
+                    if src and tgt and src != tgt:
+                        rel = (r.get("relation") or "").strip().lower().replace(" ", "_")
+                        if not rel or rel in ("associated_with", "connected_to", "related_to"):
+                            src_cat = self.graph.nodes.get(src.lower(), {}).get("category", "Concept")
+                            dst_cat = self.graph.nodes.get(tgt.lower(), {}).get("category", "Concept")
+                            rel = infer_semantic_relation(src_cat, dst_cat)
                         self.add_relation(
-                            source_name=r.get("source", ""),
-                            target_name=r.get("target", ""),
-                            relation=r.get("relation", "connected_to"),
+                            source_name=src,
+                            target_name=tgt,
+                            relation=rel,
                             premise=r.get("premise", ""),
                             cite_id=cite_id,
                         )
-                    return entities, relations
+                        valid_relations.append({
+                            "source": src,
+                            "target": tgt,
+                            "relation": rel,
+                            "premise": r.get("premise", ""),
+                        })
+
+                if valid_entities:
+                    return valid_entities, valid_relations
 
             except Exception as exc:
                 logger.warning(f"LLM entity extraction failed: {exc}. Using heuristic fallback.")
@@ -329,40 +468,48 @@ class KnowledgeGraphEngine:
         return self._heuristic_extract(text, cite_id=cite_id)
 
     def _heuristic_extract(self, text: str, cite_id: int = 1) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """Fast regex heuristic extraction of common organizations, standards, and technical terms."""
+        """Fast regex heuristic extraction of domain organizations, programs, standards, and concepts."""
         entities: List[Dict[str, Any]] = []
         relations: List[Dict[str, Any]] = []
+        seen_names: Set[str] = set()
 
-        # 1. Known technical standards pattern (e.g. ISO-9001, IEEE 802.11, MIL-STD-810)
+        # 1. Technical standards specifications (e.g. ISO-9001, IEEE 802.11, MIL-STD-810)
         std_matches = set(re.findall(r"\b(?:ISO|IEEE|MIL-STD|DO|RFC|ECMA|ANSI|NIST)[-\s][\dA-Z.-]+\b", text))
         for m in std_matches:
-            self.add_entity(m, category="Standard", description="Technical standard specification", cite_id=cite_id)
-            entities.append({"name": m, "category": "Standard"})
+            c_name = sanitize_and_validate_entity(m)
+            if c_name and c_name.lower() not in seen_names:
+                seen_names.add(c_name.lower())
+                self.add_entity(c_name, category="Standard", description="Technical standard specification", cite_id=cite_id)
+                entities.append({"name": c_name, "category": "Standard"})
 
         # 2. Capitalized multi-word organization / program phrases
         cap_phrases = set(re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}\b", text))
-        for p in list(cap_phrases)[:12]:
-            if any(stop in p.lower() for stop in ["this is", "the following", "in order", "furthermore", "according to", "based on", "table of"]):
-                continue
-            cat = "Organization" if any(w in p for w in ["Lab", "Institute", "Corp", "Inc", "Agency", "Group", "Dept", "Force", "Consortium"]) else "Program"
-            self.add_entity(p, category=cat, description=f"Entity identified in document [{cite_id}]", cite_id=cite_id)
-            entities.append({"name": p, "category": cat})
+        for p in list(cap_phrases)[:15]:
+            c_name = sanitize_and_validate_entity(p)
+            if c_name and c_name.lower() not in seen_names:
+                seen_names.add(c_name.lower())
+                cat = "Organization" if any(w in c_name for w in ["Lab", "Institute", "Corp", "Inc", "Agency", "Group", "Dept", "Force", "Consortium", "Office", "Bureau"]) else "Program"
+                self.add_entity(c_name, category=cat, description=f"Entity identified in document [{cite_id}]", cite_id=cite_id)
+                entities.append({"name": c_name, "category": cat})
 
         # 3. Bold technical concepts in synthesis or notes: **Term**
         bold_terms = set(re.findall(r"\*\*([A-Za-z0-9\s_-]{3,35})\*\*", text))
-        for b in list(bold_terms)[:10]:
-            clean_b = b.strip()
-            if clean_b and not any(e["name"].lower() == clean_b.lower() for e in entities):
-                self.add_entity(clean_b, category="Concept", description=f"Technical concept emphasized in [{cite_id}]", cite_id=cite_id)
-                entities.append({"name": clean_b, "category": "Concept"})
+        for b in list(bold_terms)[:12]:
+            c_name = sanitize_and_validate_entity(b)
+            if c_name and c_name.lower() not in seen_names:
+                seen_names.add(c_name.lower())
+                self.add_entity(c_name, category="Concept", description=f"Technical concept emphasized in [{cite_id}]", cite_id=cite_id)
+                entities.append({"name": c_name, "category": "Concept"})
 
-        # Relate pairs if multiple entities found
-        ent_names = [e["name"] for e in entities]
-        for i in range(len(ent_names) - 1):
-            src = ent_names[i]
-            dst = ent_names[i + 1]
-            self.add_relation(src, dst, relation="associated_with", premise=f"Co-occurred in [{cite_id}]", cite_id=cite_id)
-            relations.append({"source": src, "target": dst, "relation": "associated_with"})
+        # 4. Form typed relationships between discovered entities (strictly no 'associated_with')
+        for i in range(len(entities) - 1):
+            src_obj = entities[i]
+            dst_obj = entities[i + 1]
+            src_name = src_obj["name"]
+            dst_name = dst_obj["name"]
+            inferred_rel = infer_semantic_relation(src_obj.get("category", "Concept"), dst_obj.get("category", "Concept"))
+            self.add_relation(src_name, dst_name, relation=inferred_rel, premise=f"Grounded co-occurrence in [{cite_id}]", cite_id=cite_id)
+            relations.append({"source": src_name, "target": dst_name, "relation": inferred_rel})
 
         return entities, relations
 
@@ -399,7 +546,7 @@ class KnowledgeGraphEngine:
             edges.append({
                 "source": u,
                 "target": v,
-                "relation": data.get("relation", "related_to"),
+                "relation": data.get("relation", "enables"),
                 "premise": data.get("premise", ""),
                 "cite_id": data.get("cite_id"),
             })
@@ -426,14 +573,13 @@ class KnowledgeGraphEngine:
             self.add_relation(
                 source_name=e.get("source", ""),
                 target_name=e.get("target", ""),
-                relation=e.get("relation", "related_to"),
+                relation=e.get("relation", "enables"),
                 premise=e.get("premise", ""),
                 cite_id=e.get("cite_id"),
             )
 
-    def compute_layout_data(self, min_repulsion: float = 120.0) -> Dict[str, Any]:
-        """Compute force-directed clustered layout coordinates entirely in background thread.
-        Clusters nodes by category with minimum 120px node repulsion to eliminate hairballs."""
+    def compute_layout_data(self, min_repulsion: float = 140.0) -> Dict[str, Any]:
+        """Compute force-directed clustered layout coordinates with semantic category clustering and >= 140px separation."""
         import math
 
         categories = ["Organization", "Program", "Key Figure", "Standard", "Material", "Concept"]
@@ -450,26 +596,37 @@ class KnowledgeGraphEngine:
             all_nodes_data[nid] = data
 
         pos: Dict[str, List[float]] = {}
-        r_cluster = 320.0
-        for i, cat in enumerate(categories):
-            ang = i * (2.0 * math.pi / len(categories))
-            cx = r_cluster * math.cos(ang)
-            cy = r_cluster * math.sin(ang)
-            c_list = cat_nodes[cat]
+        r_cluster = 360.0
+        active_cats = [c for c in categories if cat_nodes[c]]
+        n_active = max(1, len(active_cats))
+
+        # Initial category anchor assignment
+        cat_anchors: Dict[str, Tuple[float, float]] = {}
+        for idx, cat in enumerate(active_cats):
+            ang = idx * (2.0 * math.pi / n_active)
+            cat_anchors[cat] = (r_cluster * math.cos(ang), r_cluster * math.sin(ang))
+
+        # Deterministic distributed placement within cluster anchors
+        for cat, c_list in cat_nodes.items():
             if not c_list:
                 continue
+            cx, cy = cat_anchors.get(cat, (0.0, 0.0))
             if len(c_list) == 1:
                 pos[c_list[0]] = [cx, cy]
             else:
                 for j, nid in enumerate(c_list):
-                    lang = j * (2.0 * math.pi / len(c_list))
-                    r_local = max(80.0, len(c_list) * 25.0)
-                    pos[nid] = [cx + r_local * math.cos(lang), cy + r_local * math.sin(lang)]
+                    # Pseudo-random deterministic offset to prevent rigid circular locking
+                    hash_val = abs(hash(nid))
+                    j_ang = (j * (2.0 * math.pi / len(c_list))) + ((hash_val % 31) / 100.0)
+                    r_local = max(100.0, min(240.0, 50.0 + len(c_list) * 20.0))
+                    pos[nid] = [cx + r_local * math.cos(j_ang), cy + r_local * math.sin(j_ang)]
 
-        # Force-directed relaxation (repulsion + edge attraction)
+        # Force-directed relaxation (repulsion + category cohesion + edge spring attraction)
         node_keys = list(pos.keys())
-        for _ in range(40):
-            # Repulsion
+        repulse_bound = max(140.0, min_repulsion)
+
+        for _ in range(50):
+            # 1. Repulsion between all node pairs
             for a in range(len(node_keys)):
                 u = node_keys[a]
                 for b in range(a + 1, len(node_keys)):
@@ -477,22 +634,30 @@ class KnowledgeGraphEngine:
                     dx = pos[u][0] - pos[v][0]
                     dy = pos[u][1] - pos[v][1]
                     dist = math.hypot(dx, dy)
-                    if dist < min_repulsion:
+                    if dist < repulse_bound:
                         d = max(dist, 1.0)
-                        ov = (min_repulsion - dist) / d * 0.5
-                        pos[u][0] += dx * ov
-                        pos[u][1] += dy * ov
-                        pos[v][0] -= dx * ov
-                        pos[v][1] -= dy * ov
+                        push = (repulse_bound - dist) / d * 0.55
+                        pos[u][0] += dx * push
+                        pos[u][1] += dy * push
+                        pos[v][0] -= dx * push
+                        pos[v][1] -= dy * push
 
-            # Edge spring attraction
+            # 2. Cohesion toward category anchor
+            for nid, p in pos.items():
+                cat = all_nodes_data.get(nid, {}).get("category", "Concept")
+                if cat in cat_anchors:
+                    ax, ay = cat_anchors[cat]
+                    pos[nid][0] += (ax - p[0]) * 0.03
+                    pos[nid][1] += (ay - p[1]) * 0.03
+
+            # 3. Edge spring attraction (ideal distance ~160px)
             for u, v in self.graph.edges():
                 if u in pos and v in pos:
                     dx = pos[v][0] - pos[u][0]
                     dy = pos[v][1] - pos[u][1]
                     dist = math.hypot(dx, dy)
-                    if dist > 180.0:
-                        pull = (dist - 180.0) * 0.04
+                    if dist > 160.0:
+                        pull = (dist - 160.0) * 0.045
                         pull_x = (dx / max(dist, 1.0)) * pull
                         pull_y = (dy / max(dist, 1.0)) * pull
                         pos[u][0] += pull_x
@@ -523,7 +688,7 @@ class KnowledgeGraphEngine:
                 out_edges.append({
                     "source": u,
                     "target": v,
-                    "relation": data.get("relation", "related_to"),
+                    "relation": data.get("relation", "enables"),
                     "premise": data.get("premise", ""),
                     "cite_id": data.get("cite_id"),
                     "x1": round(pos[u][0], 1),
@@ -542,6 +707,8 @@ __all__ = [
     "KnowledgeGraphEngine",
     "localize_kg_relation",
     "clean_and_parse_json",
+    "sanitize_and_validate_entity",
+    "infer_semantic_relation",
 ]
 
 

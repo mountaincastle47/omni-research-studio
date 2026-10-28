@@ -1540,21 +1540,32 @@ class MainWindow(QMainWindow):
         """Handle progressive live cost and token accumulation updates."""
         self.update_telemetry()
 
-    def _update_eta_display(self, eta_seconds: int, is_ready: bool = False) -> None:
-        """Update ETA prefix and value labels with font metric adjustments."""
+    def _update_eta_display(self, eta_seconds: int, is_ready: bool = False, elapsed_seconds: int = 0) -> None:
+        """Update ETA prefix and value labels with dynamic elapsed time support."""
         if is_ready:
             self.eta_prefix_label.setText("")
             self.eta_prefix_label.setFixedWidth(0)
             self.eta_value_label.setText(get_text("eta_ready", self.current_language))
             return
 
-        if eta_seconds > 0:
+        if eta_seconds > 1:
             prefix_text = "남은 시간:" if self.current_language == "ko" else "ETA:"
             self.eta_prefix_label.setText(prefix_text)
             fm = self.eta_prefix_label.fontMetrics()
             prefix_width = fm.horizontalAdvance(prefix_text) + 4
             self.eta_prefix_label.setFixedWidth(prefix_width)
+            self.eta_value_label.setFixedWidth(55)
             self.eta_value_label.setText(f"~{eta_seconds}s")
+        elif elapsed_seconds > 0:
+            m, s = divmod(elapsed_seconds, 60)
+            time_str = f"{m}m {s:02d}s" if m > 0 else f"{s}s"
+            prefix_text = "경과:" if self.current_language == "ko" else "Elapsed:"
+            self.eta_prefix_label.setText(prefix_text)
+            fm = self.eta_prefix_label.fontMetrics()
+            prefix_width = fm.horizontalAdvance(prefix_text) + 4
+            self.eta_prefix_label.setFixedWidth(prefix_width)
+            self.eta_value_label.setFixedWidth(max(55, fm.horizontalAdvance(time_str) + 12))
+            self.eta_value_label.setText(time_str)
         else:
             self.eta_prefix_label.setText("")
             self.eta_prefix_label.setFixedWidth(0)
@@ -1608,14 +1619,22 @@ class MainWindow(QMainWindow):
         else:
             self.progress_bar.setRange(0, 0)
         if status_text == "CACHE_HIT":
+            self._active_task_start = None
             self._update_eta_display(0, is_ready=True)
             self._set_status(get_text("status_cache_hit", self.current_language))
             return
 
-        if eta_seconds > 0:
-            self._update_eta_display(eta_seconds)
-        elif percentage >= 100:
+        if not hasattr(self, "_active_task_start") or self._active_task_start is None:
+            self._active_task_start = time.monotonic()
+        elapsed_sec = int(time.monotonic() - self._active_task_start)
+
+        if percentage >= 100:
+            self._active_task_start = None
             self._update_eta_display(0, is_ready=True)
+        elif eta_seconds > 1:
+            self._update_eta_display(eta_seconds)
+        elif elapsed_sec > 0:
+            self._update_eta_display(0, is_ready=False, elapsed_seconds=elapsed_sec)
         else:
             self._update_eta_display(0, is_ready=False)
 
@@ -2512,10 +2531,18 @@ class MainWindow(QMainWindow):
             if hasattr(self, "last_citations") and self.last_citations
             else (audit.total_citations if audit else 0)
         )
-        title = self.query_input.toPlainText().strip() or self.sweep_topic_input.toPlainText().strip() or "OmniResearch Report"
+        raw_prompt = self.query_input.toPlainText().strip() or self.sweep_topic_input.toPlainText().strip()
+        from core.exporter import extract_clean_report_title
+        title = extract_clean_report_title(
+            active_text,
+            fallback_title=raw_prompt if (len(raw_prompt) < 80 and "\n" not in raw_prompt) else "",
+            language=self.current_language,
+        )
 
         return {
             "title": title,
+            "raw_prompt": raw_prompt,
+            "query": raw_prompt,
             "model_name": model_name,
             "synthesis_model": model_name,
             "audit": audit,
