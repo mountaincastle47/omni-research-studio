@@ -943,8 +943,8 @@ def run_smoke_test() -> int:
             if not kg_svg_path.exists() or kg_svg_path.stat().st_size < 50:
                 raise RuntimeError("Knowledge Graph SVG export file was not created or is empty!")
 
-            # Assertion 2: Verify XML prologue, standard xmlns, and viewBox
-            for svg_path in (causal_svg_path, kg_svg_path):
+            # Assertion 2: Verify XML prologue, standard xmlns, and viewBox matching itemsBoundingRect within 10%
+            for widget, svg_path in [(causal_widget, causal_svg_path), (kg_widget, kg_svg_path)]:
                 svg_txt = svg_path.read_text(encoding="utf-8")
                 if not svg_txt.lstrip().startswith("<?xml"):
                     raise RuntimeError(f"{svg_path.name} missing XML prolog <?xml ...")
@@ -954,6 +954,19 @@ def run_smoke_test() -> int:
                     raise RuntimeError(f"{svg_path.name} missing viewBox attribute")
                 if re.search(r'width="[\d.]+mm"', svg_txt):
                     raise RuntimeError(f"{svg_path.name} contains invalid millimeter width")
+
+                # Verify viewBox coordinates match itemsBoundingRect within 10% tolerance (no collapsed/empty viewport)
+                match = re.search(r'viewBox="([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)"', svg_txt)
+                if not match:
+                    raise RuntimeError(f"{svg_path.name} viewBox format invalid: {svg_txt[:200]}")
+                vb_x, vb_y, vb_w, vb_h = (float(v) for v in match.groups())
+                items_rect = widget.scene.itemsBoundingRect().adjusted(-50, -50, 50, 50)
+                if items_rect.isNull() or items_rect.isEmpty():
+                    items_rect = QRectF(-400, -300, 800, 600)
+                if abs(vb_w - items_rect.width()) / max(1.0, items_rect.width()) > 0.10:
+                    raise RuntimeError(f"{svg_path.name} viewBox width {vb_w} diverges >10% from itemsBoundingRect width {items_rect.width()}!")
+                if abs(vb_h - items_rect.height()) / max(1.0, items_rect.height()) > 0.10:
+                    raise RuntimeError(f"{svg_path.name} viewBox height {vb_h} diverges >10% from itemsBoundingRect height {items_rect.height()}!")
 
             # High-res raster image exports (4K resolution verification)
             causal_png_path = export_dir / "causal_graph.png"
@@ -1106,6 +1119,57 @@ def run_smoke_test() -> int:
             kg_test_ui.update_language("en")
             if gcv_item.name != "Ground Combat Vehicle":
                 raise RuntimeError(f"Entity node failed to restore English name! Got: {gcv_item.name}")
+
+            # Assertion 16.8.5: Interactive Category Filter Toggles & Localized Tooltips
+            kg_test_ui.engine.add_entity("Inconel 718", category="Material")
+            kg_test_ui.engine.add_relation("Ground Combat Vehicle", "Inconel 718", relation="incorporates")
+            kg_layout_updated = kg_test_ui.engine.compute_layout_data(min_repulsion=280.0)
+            kg_test_ui.load_precomputed_layout(kg_layout_updated)
+
+            inconel_item = kg_test_ui._node_items.get("inconel 718")
+            gcv_item = kg_test_ui._node_items.get("ground combat vehicle") or kg_test_ui._node_items.get("Ground Combat Vehicle")
+            if not inconel_item or not inconel_item.isVisible():
+                raise RuntimeError("Material node 'Inconel 718' was not visible initially!")
+            if not gcv_item or not gcv_item.isVisible():
+                raise RuntimeError("Program node 'Ground Combat Vehicle' was not visible initially!")
+
+            # Toggle off 'Material' category
+            mat_btn = kg_test_ui.category_buttons.get("Material")
+            if not mat_btn:
+                raise RuntimeError("Category toggle button 'Material' missing from KnowledgeGraphWidget!")
+            mat_btn.setChecked(False)
+
+            if inconel_item.isVisible():
+                raise RuntimeError("Material node 'Inconel 718' remained visible after unchecking Material category!")
+            if not gcv_item.isVisible():
+                raise RuntimeError("Program node was incorrectly hidden when unchecking Material category!")
+
+            inconel_edges = [
+                e for e in kg_test_ui._edge_items
+                if "inconel 718" in (e.source_id.lower(), e.target_id.lower())
+            ]
+            for ie in inconel_edges:
+                if ie.isVisible():
+                    raise RuntimeError("Edge connected to hidden Material node remained visible!")
+
+            # Toggle 'Material' category back on
+            mat_btn.setChecked(True)
+            if not inconel_item.isVisible():
+                raise RuntimeError("Material node 'Inconel 718' failed to become visible after re-checking Material!")
+
+            # Verify all category toggle buttons have valid, non-empty localized tooltips
+            for cat, btn in kg_test_ui.category_buttons.items():
+                tip_en = btn.toolTip().strip()
+                if not tip_en or "Toggle visibility" not in tip_en:
+                    raise RuntimeError(f"Category button '{cat}' has invalid English tooltip: '{tip_en}'")
+
+            kg_test_ui.update_language("ko")
+            for cat, btn in kg_test_ui.category_buttons.items():
+                tip_ko = btn.toolTip().strip()
+                if not tip_ko or "전환" not in tip_ko:
+                    raise RuntimeError(f"Category button '{cat}' has invalid Korean tooltip: '{tip_ko}'")
+
+            kg_test_ui.update_language("en")
 
         print("   -> Knowledge Graph decluttered default state (0 overlapping badges) verified.")
         print("   -> Knowledge Graph dynamic hover/selection badge reveal and expanded physics verified.")

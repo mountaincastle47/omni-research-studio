@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union
 
@@ -120,6 +121,11 @@ class _KGNodeItem(QGraphicsEllipseItem):
                 self.label_item.setPos(value.x() - bounds.width() / 2.0, value.y() + self.radius + 4.0)
         return super().itemChange(change, value)
 
+    def setVisible(self, visible: bool) -> None:
+        super().setVisible(visible)
+        if hasattr(self, "label_item") and self.label_item:
+            self.label_item.setVisible(visible)
+
     def setOpacity(self, opacity: float) -> None:
         super().setOpacity(opacity)
         if hasattr(self, "label_item") and self.label_item:
@@ -200,6 +206,8 @@ class _KGEdgeItem(QGraphicsLineItem):
         self._lang = lang
         self.parent_widget = parent_widget
         self._badge_visible = False
+        self.source_node: Optional[_KGNodeItem] = None
+        self.target_node: Optional[_KGNodeItem] = None
 
         self.setPen(QPen(QColor("#334155"), 1.8))
         self.setZValue(1.0)  # Connection lines at Z=1.0
@@ -312,6 +320,20 @@ class _KGEdgeItem(QGraphicsLineItem):
         self._update_badge_geometry(line.x1(), line.y1(), line.x2(), line.y2(), display_text)
         self.show_badge(self._badge_visible)
 
+    def setVisible(self, visible: bool) -> None:
+        super().setVisible(visible)
+        if not visible:
+            if self.badge_bg:
+                self.badge_bg.setVisible(False)
+            if self.label_item:
+                self.label_item.setVisible(False)
+        else:
+            if self._badge_visible:
+                if self.badge_bg:
+                    self.badge_bg.setVisible(True)
+                if self.label_item:
+                    self.label_item.setVisible(True)
+
     def setOpacity(self, opacity: float) -> None:
         super().setOpacity(opacity)
         if self.badge_bg:
@@ -388,6 +410,10 @@ class KnowledgeGraphWidget(QWidget):
         self._edge_items: List[_KGEdgeItem] = []
         self._selected_node: Optional[str] = None
         self._cached_layout_data: Optional[Dict[str, Any]] = None
+        self.active_categories: Set[str] = {
+            "Organization", "Program", "Key Figure", "Standard", "Material", "Concept"
+        }
+        self.category_buttons: Dict[str, QPushButton] = {}
 
         self._build_ui()
         self._render_graph()
@@ -439,15 +465,26 @@ class KnowledgeGraphWidget(QWidget):
         self.btn_zoom_out.clicked.connect(lambda: self.view.scale(1.0 / 1.2, 1.0 / 1.2))
         top_strip.addWidget(self.btn_zoom_out)
 
-        self.btn_export = QPushButton("Export SVG" if self._lang == "en" else "SVG 내보내기", self)
-        self.btn_export.setToolTip(get_text("tooltip_export_svg", self._lang))
-        self.btn_export.setStyleSheet(
+        self.btn_export_png = QPushButton("Export PNG" if self._lang == "en" else "PNG 내보내기", self)
+        self.btn_export_png.setToolTip(get_text("tooltip_export_png", self._lang))
+        self.btn_export_png.setStyleSheet(
             "QPushButton { background-color: #1E293B; color: #F1F5F9; border: 1px solid #334155; "
             "border-radius: 6px; padding: 6px 12px; font-size: 11px; font-weight: 600; } "
             "QPushButton:hover { background-color: #334155; }"
         )
-        self.btn_export.clicked.connect(self._on_export_svg)
-        top_strip.addWidget(self.btn_export)
+        self.btn_export_png.clicked.connect(self._on_export_png)
+        top_strip.addWidget(self.btn_export_png)
+
+        self.btn_export_svg = QPushButton("Export SVG" if self._lang == "en" else "SVG 내보내기", self)
+        self.btn_export_svg.setToolTip(get_text("tooltip_export_svg", self._lang))
+        self.btn_export_svg.setStyleSheet(
+            "QPushButton { background-color: #1E293B; color: #F1F5F9; border: 1px solid #334155; "
+            "border-radius: 6px; padding: 6px 12px; font-size: 11px; font-weight: 600; } "
+            "QPushButton:hover { background-color: #334155; }"
+        )
+        self.btn_export_svg.clicked.connect(self._on_export_svg)
+        top_strip.addWidget(self.btn_export_svg)
+        self.btn_export = self.btn_export_svg
 
         layout.addLayout(top_strip)
 
@@ -458,24 +495,80 @@ class KnowledgeGraphWidget(QWidget):
         self.view = KnowledgeGraphView(self.scene, self)
         layout.addWidget(self.view, stretch=1)
 
-        # Bottom Legend Bar
+        # Bottom Legend Bar with Interactive Category Filter Toggles
         legend_frame = QFrame(self)
         legend_frame.setStyleSheet("QFrame { background-color: #0B0E14; border: 1px solid #1E293B; border-radius: 4px; padding: 4px; }")
         legend_layout = QHBoxLayout(legend_frame)
-        legend_layout.setContentsMargins(6, 2, 6, 2)
-        legend_layout.setSpacing(12)
+        legend_layout.setContentsMargins(6, 3, 6, 3)
+        legend_layout.setSpacing(8)
+
+        cat_key_map = {
+            "Organization": "organization",
+            "Program": "program",
+            "Key Figure": "key_figure",
+            "Standard": "standard",
+            "Material": "material",
+            "Concept": "concept",
+        }
 
         for cat, col in ENTITY_CATEGORIES.items():
-            lbl = QLabel(f"● {cat}", legend_frame)
-            lbl.setStyleSheet(f"color: {col}; font-size: 10px; font-weight: 600;")
-            legend_layout.addWidget(lbl)
+            k = cat_key_map.get(cat, cat.lower())
+            btn = QPushButton(f"● {get_text(f'category_{k}', self._lang)}", legend_frame)
+            btn.setCheckable(True)
+            btn.setChecked(True)
+            btn.setToolTip(get_text(f"tooltip_toggle_category_{k}", self._lang))
+            btn.setStyleSheet(self._get_category_button_style(col))
+            btn.toggled.connect(lambda checked, c=cat: self._on_category_toggled(c, checked))
+            self.category_buttons[cat] = btn
+            legend_layout.addWidget(btn)
 
         legend_layout.addStretch(1)
-        lbl_hint = QLabel("Tip: Click node to highlight connections | Double-click to search corpus", legend_frame)
-        lbl_hint.setStyleSheet("color: #64748B; font-size: 10px; font-style: italic;")
-        legend_layout.addWidget(lbl_hint)
+        self.lbl_hint = QLabel(
+            "Tip: Click category to toggle | Click node to inspect | Double-click to search corpus"
+            if self._lang == "en"
+            else "팁: 범주 클릭하여 켜기/끄기 | 노드 클릭하여 연결 강조 | 더블클릭하여 검색",
+            legend_frame,
+        )
+        self.lbl_hint.setStyleSheet("color: #64748B; font-size: 10px; font-style: italic;")
+        legend_layout.addWidget(self.lbl_hint)
 
         layout.addWidget(legend_frame)
+
+    @staticmethod
+    def _get_category_button_style(color_hex: str) -> str:
+        return (
+            f"QPushButton {{"
+            f"  background-color: #0B0F19; color: #475569; border: 1px solid #1E293B; "
+            f"  border-radius: 4px; padding: 3px 8px; font-size: 11px; font-weight: 500;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  background-color: #131B2E; color: #94A3B8; border-color: #334155;"
+            f"}}"
+            f"QPushButton:checked {{"
+            f"  background-color: #131D2E; color: {color_hex}; border: 1.5px solid {color_hex}; "
+            f"  font-weight: 700;"
+            f"}}"
+            f"QPushButton:checked:hover {{"
+            f"  background-color: #1E293B; border-color: {color_hex};"
+            f"}}"
+        )
+
+    def _on_category_toggled(self, category: str, checked: bool) -> None:
+        if checked:
+            self.active_categories.add(category)
+        else:
+            self.active_categories.discard(category)
+        self.apply_category_filter()
+
+    def apply_category_filter(self) -> None:
+        """Filter visible nodes and connected edges based on active category toggles."""
+        for node in self._node_items.values():
+            node.setVisible(node.category in self.active_categories)
+        for edge in self._edge_items:
+            src = edge.source_node or self._node_items.get(edge.source_id.lower()) or self._node_items.get(edge.source_id)
+            tgt = edge.target_node or self._node_items.get(edge.target_id.lower()) or self._node_items.get(edge.target_id)
+            edge_visible = bool(src and src.isVisible() and tgt and tgt.isVisible())
+            edge.setVisible(edge_visible)
 
     def load_precomputed_layout(self, layout_data: Optional[Dict[str, Any]]) -> None:
         """Instantly populate graph from background precalculated layout coordinates."""
@@ -554,6 +647,11 @@ class KnowledgeGraphWidget(QWidget):
                 self.scene.addItem(node_item.label_item)
             self._node_items[nid] = node_item
 
+        for edge in self._edge_items:
+            edge.source_node = self._node_items.get(edge.source_id.lower()) or self._node_items.get(edge.source_id)
+            edge.target_node = self._node_items.get(edge.target_id.lower()) or self._node_items.get(edge.target_id)
+
+        self.apply_category_filter()
         self.enforce_node_collision_boundaries()
         self.auto_layout_fit()
 
@@ -831,9 +929,52 @@ class KnowledgeGraphWidget(QWidget):
         self.btn_relayout.setToolTip(get_text("tooltip_auto_layout", lang))
         self.btn_zoom_in.setToolTip(get_text("tooltip_zoom_in", lang))
         self.btn_zoom_out.setToolTip(get_text("tooltip_zoom_out", lang))
+        if hasattr(self, "btn_export_png"):
+            self.btn_export_png.setText(get_text("btn_export_png", lang))
+            self.btn_export_png.setToolTip(get_text("tooltip_export_png", lang))
+        if hasattr(self, "btn_export_svg"):
+            self.btn_export_svg.setText(get_text("btn_export_svg", lang))
+            self.btn_export_svg.setToolTip(get_text("tooltip_export_svg", lang))
         if hasattr(self, "btn_export"):
-            self.btn_export.setText("Export SVG" if lang == "en" else "SVG 내보내기")
+            self.btn_export.setText(get_text("btn_export_svg", lang))
             self.btn_export.setToolTip(get_text("tooltip_export_svg", lang))
+
+        cat_key_map = {
+            "Organization": "organization",
+            "Program": "program",
+            "Key Figure": "key_figure",
+            "Standard": "standard",
+            "Material": "material",
+            "Concept": "concept",
+        }
+        for cat, btn in getattr(self, "category_buttons", {}).items():
+            k = cat_key_map.get(cat, cat.lower())
+            btn.setText(f"● {get_text(f'category_{k}', lang)}")
+            btn.setToolTip(get_text(f"tooltip_toggle_category_{k}", lang))
+
+        if hasattr(self, "lbl_hint"):
+            self.lbl_hint.setText(
+                "Tip: Click category to toggle | Click node to inspect | Double-click to search corpus"
+                if lang == "en"
+                else "팁: 범주 클릭하여 켜기/끄기 | 노드 클릭하여 연결 강조 | 더블클릭하여 검색"
+            )
+
+    def _on_export_png(self) -> None:
+        file_path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Save Knowledge Graph" if self._lang == "en" else "지식 그래프 저장",
+            "knowledge_graph.png",
+            "High-Resolution PNG (*.png);;Scalable Vector Graphics (*.svg)",
+        )
+        if file_path:
+            if file_path.lower().endswith(".svg") or "SVG" in selected_filter:
+                if not file_path.lower().endswith(".svg"):
+                    file_path = re.sub(r"\.png$", "", file_path, flags=re.I) + ".svg"
+                self.export_to_svg(file_path)
+            else:
+                if not file_path.lower().endswith(".png"):
+                    file_path = re.sub(r"\.svg$", "", file_path, flags=re.I) + ".png"
+                self.export_image(file_path)
 
     def _on_export_svg(self) -> None:
         file_path, selected_filter = QFileDialog.getSaveFileName(
@@ -843,8 +984,7 @@ class KnowledgeGraphWidget(QWidget):
             "Scalable Vector Graphics (*.svg);;High-Resolution PNG (*.png)",
         )
         if file_path:
-            is_png = file_path.lower().endswith(".png") or "PNG" in selected_filter
-            if is_png:
+            if file_path.lower().endswith(".png") or "PNG" in selected_filter:
                 if not file_path.lower().endswith(".png"):
                     file_path = re.sub(r"\.svg$", "", file_path, flags=re.I) + ".png"
                 self.export_image(file_path)
@@ -857,28 +997,32 @@ class KnowledgeGraphWidget(QWidget):
         """Export knowledge graph to standard-compliant scalable vector SVG with accurate coordinate scaling."""
         target = Path(file_path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        rect = self.scene.itemsBoundingRect().adjusted(-40, -40, 40, 40)
-        if rect.isNull() or rect.isEmpty():
-            rect = QRectF(0, 0, 800, 600)
+        items_rect = self.scene.itemsBoundingRect().adjusted(-50, -50, 50, 50)
+        if items_rect.isNull() or items_rect.isEmpty():
+            items_rect = QRectF(-400, -300, 800, 600)
 
-        w = max(400, int(rect.width()))
-        h = max(300, int(rect.height()))
+        w = int(items_rect.width())
+        h = int(items_rect.height())
+
+        print(f"[KG SVG Export] items_rect: {items_rect}, w: {w}, h: {h}")
+        print(f"[KG SVG Export] Target rect: {QRectF(items_rect)}, Source rect: {items_rect}")
 
         try:
             from PyQt6.QtSvg import QSvgGenerator
             generator = QSvgGenerator()
             generator.setFileName(str(target))
             generator.setSize(QSize(w, h))
-            generator.setViewBox(QRectF(0, 0, float(w), float(h)))
+            generator.setViewBox(items_rect)
             generator.setTitle("Knowledge Graph")
             generator.setDescription("Generated by OmniResearch Studio")
 
             painter = QPainter()
             if painter.begin(generator):
-                target_rect = QRectF(0, 0, float(w), float(h))
-                painter.fillRect(target_rect, QColor("#0d1117"))
-                self.scene.render(painter, target=target_rect, source=rect)
+                painter.fillRect(items_rect, QColor("#0d1117"))
+                self.scene.render(painter, QRectF(items_rect), items_rect)
                 painter.end()
+
+            print(f"[KG SVG Export] Rendered to {target} with viewBox: {items_rect}")
 
             if target.exists() and target.stat().st_size > 0:
                 svg_txt = target.read_text(encoding="utf-8", errors="replace")
@@ -886,17 +1030,18 @@ class KnowledgeGraphWidget(QWidget):
                 if not svg_txt.lstrip().startswith("<?xml"):
                     svg_txt = '<?xml version="1.0" encoding="utf-8"?>\n' + svg_txt
                 if "viewBox=" not in svg_txt:
-                    svg_txt = svg_txt.replace("<svg", f'<svg viewBox="0 0 {w} {h}"', 1)
+                    svg_txt = svg_txt.replace("<svg", f'<svg viewBox="{int(items_rect.x())} {int(items_rect.y())} {w} {h}"', 1)
                 svg_txt = re.sub(r'width="[\d.]+mm"', f'width="{w}px"', svg_txt)
                 svg_txt = re.sub(r'height="[\d.]+mm"', f'height="{h}px"', svg_txt)
                 target.write_text(svg_txt, encoding="utf-8")
-        except Exception:
+        except Exception as ex:
+            print(f"[KG SVG Export Error] {ex}")
             xml_fallback = (
                 '<?xml version="1.0" encoding="utf-8"?>\n'
                 f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}px" height="{h}px" '
-                f'viewBox="0 0 {w} {h}">\n'
-                '<rect width="100%" height="100%" fill="#0d1117"/>\n'
-                '<text x="50%" y="50%" fill="#94A3B8" font-size="16" text-anchor="middle">Knowledge Graph</text>\n'
+                f'viewBox="{int(items_rect.x())} {int(items_rect.y())} {w} {h}">\n'
+                f'<rect x="{int(items_rect.x())}" y="{int(items_rect.y())}" width="100%" height="100%" fill="#0d1117"/>\n'
+                f'<text x="{int(items_rect.center().x())}" y="{int(items_rect.center().y())}" fill="#94A3B8" font-size="16" text-anchor="middle">Knowledge Graph</text>\n'
                 '</svg>'
             )
             target.write_text(xml_fallback, encoding="utf-8")
@@ -907,14 +1052,14 @@ class KnowledgeGraphWidget(QWidget):
         from PyQt6.QtGui import QImage
         target = Path(file_path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        rect = self.scene.itemsBoundingRect().adjusted(-40, -40, 40, 40)
-        if rect.isNull() or rect.isEmpty():
-            rect = QRectF(0, 0, 1920, 1080)
+        items_rect = self.scene.itemsBoundingRect().adjusted(-50, -50, 50, 50)
+        if items_rect.isNull() or items_rect.isEmpty():
+            items_rect = QRectF(-960, -540, 1920, 1080)
         min_4k_w = 3840
-        calc_w = int(rect.width() * scale)
+        calc_w = int(items_rect.width() * scale)
         w = max(min_4k_w, calc_w)
-        actual_scale = w / max(1.0, rect.width())
-        h = max(2160, int(rect.height() * actual_scale))
+        actual_scale = w / max(1.0, items_rect.width())
+        h = max(2160, int(items_rect.height() * actual_scale))
         image = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
         image.fill(QColor("#0d1117"))
         painter = QPainter()
@@ -925,7 +1070,7 @@ class KnowledgeGraphWidget(QWidget):
                 | QPainter.RenderHint.SmoothPixmapTransform
             )
             target_rect = QRectF(0, 0, float(w), float(h))
-            self.scene.render(painter, target=target_rect, source=rect)
+            self.scene.render(painter, target=target_rect, source=items_rect)
             painter.end()
         image.save(str(target), "PNG", quality=100)
         return target

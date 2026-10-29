@@ -500,13 +500,22 @@ class CausalGraphWidget(QWidget):
         self.btn_zoom_reset.clicked.connect(self._on_zoom_reset)
         toolbar.addWidget(self.btn_zoom_reset)
 
-        self.btn_export = QPushButton("Export SVG" if self._lang == "en" else "SVG 내보내기", self)
-        self.btn_export.setToolTip(get_text("tooltip_export_svg", self._lang))
-        self.btn_export.setStyleSheet(
+        self.btn_export_png = QPushButton("Export PNG" if self._lang == "en" else "PNG 내보내기", self)
+        self.btn_export_png.setToolTip(get_text("tooltip_export_png", self._lang))
+        self.btn_export_png.setStyleSheet(
             "background-color: #1E293B; color: #F1F5F9; border-radius: 4px; padding: 4px 10px; font-size: 11px;"
         )
-        self.btn_export.clicked.connect(self._on_export_svg)
-        toolbar.addWidget(self.btn_export)
+        self.btn_export_png.clicked.connect(self._on_export_png)
+        toolbar.addWidget(self.btn_export_png)
+
+        self.btn_export_svg = QPushButton("Export SVG" if self._lang == "en" else "SVG 내보내기", self)
+        self.btn_export_svg.setToolTip(get_text("tooltip_export_svg", self._lang))
+        self.btn_export_svg.setStyleSheet(
+            "background-color: #1E293B; color: #F1F5F9; border-radius: 4px; padding: 4px 10px; font-size: 11px;"
+        )
+        self.btn_export_svg.clicked.connect(self._on_export_svg)
+        toolbar.addWidget(self.btn_export_svg)
+        self.btn_export = self.btn_export_svg
 
         layout.addLayout(toolbar)
 
@@ -739,6 +748,23 @@ class CausalGraphWidget(QWidget):
         else:
             QDesktopServices.openUrl(url)
 
+    def _on_export_png(self) -> None:
+        file_path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Save Causal Graph" if self._lang == "en" else "인과 다이어그램 저장",
+            "causal_graph.png",
+            "High-Resolution PNG (*.png);;Scalable Vector Graphics (*.svg)",
+        )
+        if file_path:
+            if file_path.lower().endswith(".svg") or "SVG" in selected_filter:
+                if not file_path.lower().endswith(".svg"):
+                    file_path = re.sub(r"\.png$", "", file_path, flags=re.I) + ".svg"
+                self.export_to_svg(file_path)
+            else:
+                if not file_path.lower().endswith(".png"):
+                    file_path = re.sub(r"\.svg$", "", file_path, flags=re.I) + ".png"
+                self.export_image(file_path)
+
     def _on_export_svg(self) -> None:
         file_path, selected_filter = QFileDialog.getSaveFileName(
             self,
@@ -747,8 +773,7 @@ class CausalGraphWidget(QWidget):
             "Scalable Vector Graphics (*.svg);;High-Resolution PNG (*.png)",
         )
         if file_path:
-            is_png = file_path.lower().endswith(".png") or "PNG" in selected_filter
-            if is_png:
+            if file_path.lower().endswith(".png") or "PNG" in selected_filter:
                 if not file_path.lower().endswith(".png"):
                     file_path = re.sub(r"\.svg$", "", file_path, flags=re.I) + ".png"
                 self.export_image(file_path)
@@ -761,47 +786,34 @@ class CausalGraphWidget(QWidget):
         """Export causal graph to standard-compliant scalable vector SVG with accurate coordinate scaling."""
         target = Path(file_path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        # 1. Prefer rendered Mermaid SVG if available and valid XML
-        if self._current_svg and "<svg" in self._current_svg:
-            svg_content = self._current_svg
-            if not svg_content.lstrip().startswith("<?xml"):
-                svg_content = '<?xml version="1.0" encoding="utf-8"?>\n' + svg_content
-            svg_content = svg_content.replace('xmlns="http://www.w3.org/2005/svg"', 'xmlns="http://www.w3.org/2000/svg"')
-            target.write_text(svg_content, encoding="utf-8")
-            return target
-        if self._raw_mermaid:
-            rendered = render_mermaid_to_svg(self._raw_mermaid)
-            if rendered and "<svg" in rendered:
-                if not rendered.lstrip().startswith("<?xml"):
-                    rendered = '<?xml version="1.0" encoding="utf-8"?>\n' + rendered
-                rendered = rendered.replace('xmlns="http://www.w3.org/2005/svg"', 'xmlns="http://www.w3.org/2000/svg"')
-                self._current_svg = rendered
-                target.write_text(rendered, encoding="utf-8")
-                return target
 
-        # 2. Render from QGraphicsScene using QSvgGenerator
-        rect = self.scene.itemsBoundingRect().adjusted(-40, -40, 40, 40)
-        if rect.isNull() or rect.isEmpty():
-            rect = QRectF(0, 0, 800, 600)
+        # Render from QGraphicsScene using QSvgGenerator
+        items_rect = self.scene.itemsBoundingRect().adjusted(-50, -50, 50, 50)
+        if items_rect.isNull() or items_rect.isEmpty():
+            items_rect = QRectF(-400, -300, 800, 600)
 
-        w = max(400, int(rect.width()))
-        h = max(300, int(rect.height()))
+        w = int(items_rect.width())
+        h = int(items_rect.height())
+
+        print(f"[Causal SVG Export] items_rect: {items_rect}, w: {w}, h: {h}")
+        print(f"[Causal SVG Export] Target rect: {QRectF(items_rect)}, Source rect: {items_rect}")
 
         try:
             from PyQt6.QtSvg import QSvgGenerator
             generator = QSvgGenerator()
             generator.setFileName(str(target))
             generator.setSize(QSize(w, h))
-            generator.setViewBox(QRectF(0, 0, float(w), float(h)))
+            generator.setViewBox(items_rect)
             generator.setTitle("Causal Graph")
             generator.setDescription("Generated by OmniResearch Studio")
 
             painter = QPainter()
             if painter.begin(generator):
-                target_rect = QRectF(0, 0, float(w), float(h))
-                painter.fillRect(target_rect, QColor("#0d1117"))
-                self.scene.render(painter, target=target_rect, source=rect)
+                painter.fillRect(items_rect, QColor("#0d1117"))
+                self.scene.render(painter, QRectF(items_rect), items_rect)
                 painter.end()
+
+            print(f"[Causal SVG Export] Rendered to {target} with viewBox: {items_rect}")
 
             if target.exists() and target.stat().st_size > 0:
                 svg_txt = target.read_text(encoding="utf-8", errors="replace")
@@ -809,17 +821,18 @@ class CausalGraphWidget(QWidget):
                 if not svg_txt.lstrip().startswith("<?xml"):
                     svg_txt = '<?xml version="1.0" encoding="utf-8"?>\n' + svg_txt
                 if "viewBox=" not in svg_txt:
-                    svg_txt = svg_txt.replace("<svg", f'<svg viewBox="0 0 {w} {h}"', 1)
+                    svg_txt = svg_txt.replace("<svg", f'<svg viewBox="{int(items_rect.x())} {int(items_rect.y())} {w} {h}"', 1)
                 svg_txt = re.sub(r'width="[\d.]+mm"', f'width="{w}px"', svg_txt)
                 svg_txt = re.sub(r'height="[\d.]+mm"', f'height="{h}px"', svg_txt)
                 target.write_text(svg_txt, encoding="utf-8")
-        except Exception:
+        except Exception as ex:
+            print(f"[Causal SVG Export Error] {ex}")
             xml_fallback = (
                 '<?xml version="1.0" encoding="utf-8"?>\n'
                 f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}px" height="{h}px" '
-                f'viewBox="0 0 {w} {h}">\n'
-                '<rect width="100%" height="100%" fill="#0d1117"/>\n'
-                '<text x="50%" y="50%" fill="#94A3B8" font-size="16" text-anchor="middle">Causal Graph</text>\n'
+                f'viewBox="{int(items_rect.x())} {int(items_rect.y())} {w} {h}">\n'
+                f'<rect x="{int(items_rect.x())}" y="{int(items_rect.y())}" width="100%" height="100%" fill="#0d1117"/>\n'
+                f'<text x="{int(items_rect.center().x())}" y="{int(items_rect.center().y())}" fill="#94A3B8" font-size="16" text-anchor="middle">Causal Graph</text>\n'
                 '</svg>'
             )
             target.write_text(xml_fallback, encoding="utf-8")
@@ -830,14 +843,14 @@ class CausalGraphWidget(QWidget):
         from PyQt6.QtGui import QImage
         target = Path(file_path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        rect = self.scene.itemsBoundingRect().adjusted(-40, -40, 40, 40)
-        if rect.isNull() or rect.isEmpty():
-            rect = QRectF(0, 0, 1920, 1080)
+        items_rect = self.scene.itemsBoundingRect().adjusted(-50, -50, 50, 50)
+        if items_rect.isNull() or items_rect.isEmpty():
+            items_rect = QRectF(-960, -540, 1920, 1080)
         min_4k_w = 3840
-        calc_w = int(rect.width() * scale)
+        calc_w = int(items_rect.width() * scale)
         w = max(min_4k_w, calc_w)
-        actual_scale = w / max(1.0, rect.width())
-        h = max(2160, int(rect.height() * actual_scale))
+        actual_scale = w / max(1.0, items_rect.width())
+        h = max(2160, int(items_rect.height() * actual_scale))
         image = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
         image.fill(QColor("#0d1117"))
         painter = QPainter()
@@ -848,7 +861,7 @@ class CausalGraphWidget(QWidget):
                 | QPainter.RenderHint.SmoothPixmapTransform
             )
             target_rect = QRectF(0, 0, float(w), float(h))
-            self.scene.render(painter, target=target_rect, source=rect)
+            self.scene.render(painter, target=target_rect, source=items_rect)
             painter.end()
         image.save(str(target), "PNG", quality=100)
         return target
@@ -859,8 +872,15 @@ class CausalGraphWidget(QWidget):
         self.btn_zoom_in.setToolTip(get_text("tooltip_zoom_in", lang))
         self.btn_zoom_out.setToolTip(get_text("tooltip_zoom_out", lang))
         self.btn_zoom_reset.setToolTip(get_text("reset_graph", lang))
-        self.btn_export.setText("Export SVG" if lang == "en" else "SVG 내보내기")
-        self.btn_export.setToolTip(get_text("tooltip_export_svg", lang))
+        if hasattr(self, "btn_export_png"):
+            self.btn_export_png.setText(get_text("btn_export_png", lang))
+            self.btn_export_png.setToolTip(get_text("tooltip_export_png", lang))
+        if hasattr(self, "btn_export_svg"):
+            self.btn_export_svg.setText(get_text("btn_export_svg", lang))
+            self.btn_export_svg.setToolTip(get_text("tooltip_export_svg", lang))
+        if hasattr(self, "btn_export"):
+            self.btn_export.setText(get_text("btn_export_svg", lang))
+            self.btn_export.setToolTip(get_text("tooltip_export_svg", lang))
 
     def update_language(self, lang_code: str, label_map: Optional[Dict[str, str]] = None) -> None:
         """Dynamically update node and edge labels to requested language without moving positions or resetting zoom/pan."""

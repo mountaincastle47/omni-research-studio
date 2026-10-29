@@ -693,6 +693,48 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "Export the current directed vector graph as a scalable SVG graphic.",
         "ko": "현재 방향성 벡터 그래프를 고해상도 SVG 벡터 파일로 내보냅니다.",
     },
+    "tooltip_export_png": {
+        "en": "Export the current graph as a high-resolution 4K raster PNG image.",
+        "ko": "현재 그래프를 초고해상도 4K 래스터 PNG 이미지로 내보냅니다.",
+    },
+    "btn_export_png": {
+        "en": "Export PNG",
+        "ko": "PNG 내보내기",
+    },
+    "btn_export_svg": {
+        "en": "Export SVG",
+        "ko": "SVG 내보내기",
+    },
+    "tooltip_toggle_category_organization": {
+        "en": "Toggle visibility of Organization nodes",
+        "ko": "조직 노드 표시 전환",
+    },
+    "tooltip_toggle_category_program": {
+        "en": "Toggle visibility of Program nodes",
+        "ko": "프로그램 노드 표시 전환",
+    },
+    "tooltip_toggle_category_key_figure": {
+        "en": "Toggle visibility of Key Figure nodes",
+        "ko": "주요 인물 노드 표시 전환",
+    },
+    "tooltip_toggle_category_standard": {
+        "en": "Toggle visibility of Standard nodes",
+        "ko": "표준 노드 표시 전환",
+    },
+    "tooltip_toggle_category_material": {
+        "en": "Toggle visibility of Material nodes",
+        "ko": "소재 노드 표시 전환",
+    },
+    "tooltip_toggle_category_concept": {
+        "en": "Toggle visibility of Concept nodes",
+        "ko": "개념 노드 표시 전환",
+    },
+    "category_organization": {"en": "Organization", "ko": "조직"},
+    "category_program": {"en": "Program", "ko": "프로그램"},
+    "category_key_figure": {"en": "Key Figure", "ko": "주요 인물"},
+    "category_standard": {"en": "Standard", "ko": "표준"},
+    "category_material": {"en": "Material", "ko": "소재"},
+    "category_concept": {"en": "Concept", "ko": "개념"},
     "tooltip_zoom_in": {
         "en": "Zoom graph viewport in or out (Mouse wheel zoom is also supported).",
         "ko": "그래프 뷰포트를 확대/축소합니다 (마우스 휠 스크롤로도 가능).",
