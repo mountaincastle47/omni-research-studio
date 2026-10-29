@@ -113,9 +113,12 @@ def build_localized_graph_mappings(
     ko_to_en: Dict[str, str] = {v: k for k, v in COMMON_CAUSAL_TRANSLATIONS.items()}
 
     try:
-        from core.knowledge_graph import KG_RELATION_TRANSLATIONS
+        from core.knowledge_graph import KG_RELATION_TRANSLATIONS, KG_COMMON_ENTITY_TRANSLATIONS
         en_to_ko.update(KG_RELATION_TRANSLATIONS)
         for k, v in KG_RELATION_TRANSLATIONS.items():
+            ko_to_en[v] = k
+        en_to_ko.update(KG_COMMON_ENTITY_TRANSLATIONS)
+        for k, v in KG_COMMON_ENTITY_TRANSLATIONS.items():
             ko_to_en[v] = k
     except Exception:
         pass

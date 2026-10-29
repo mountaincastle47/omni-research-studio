@@ -397,10 +397,21 @@ class WorkspaceReportPane(QWidget):
                     self.synthesis_original_text,
                     translated_markdown,
                 )
-                self.causal_label_map_en_to_ko = en_to_ko
-                self.causal_label_map_ko_to_en = ko_to_en
-                self.kg_label_map_en_to_ko = en_to_ko
-                self.kg_label_map_ko_to_en = ko_to_en
+                self.causal_label_map_en_to_ko = dict(en_to_ko)
+                self.causal_label_map_ko_to_en = dict(ko_to_en)
+                self.kg_label_map_en_to_ko = dict(en_to_ko)
+                self.kg_label_map_ko_to_en = dict(ko_to_en)
+
+                if hasattr(self, "knowledge_graph_viewer") and hasattr(self.knowledge_graph_viewer, "_node_items"):
+                    from core.knowledge_graph import translate_kg_entity_name
+                    for nid, n_item in self.knowledge_graph_viewer._node_items.items():
+                        orig_name = getattr(n_item, "original_name", "") or nid
+                        if orig_name not in self.kg_label_map_en_to_ko:
+                            ko_val = translate_kg_entity_name(orig_name, "ko")
+                            if ko_val:
+                                self.kg_label_map_en_to_ko[orig_name] = ko_val
+                                self.kg_label_map_en_to_ko[nid] = ko_val
+                                self.kg_label_map_ko_to_en[ko_val] = orig_name
             except Exception:
                 pass
         self.update_graph_language("ko")
@@ -480,6 +491,18 @@ class WorkspaceReportPane(QWidget):
 
     def update_graph_language(self, lang_code: str) -> None:
         """Swap labels in both graph viewers without resetting zoom, pan, or node positions."""
+        if lang_code == "ko":
+            from core.knowledge_graph import translate_kg_entity_name
+            if hasattr(self, "knowledge_graph_viewer") and hasattr(self.knowledge_graph_viewer, "_node_items"):
+                for nid, n_item in self.knowledge_graph_viewer._node_items.items():
+                    orig_name = getattr(n_item, "original_name", "") or nid
+                    if orig_name not in self.kg_label_map_en_to_ko:
+                        ko_val = translate_kg_entity_name(orig_name, "ko")
+                        if ko_val:
+                            self.kg_label_map_en_to_ko[orig_name] = ko_val
+                            self.kg_label_map_en_to_ko[nid] = ko_val
+                            self.kg_label_map_ko_to_en[ko_val] = orig_name
+
         causal_map = self.causal_label_map_en_to_ko if lang_code == "ko" else self.causal_label_map_ko_to_en
         kg_map = self.kg_label_map_en_to_ko if lang_code == "ko" else self.kg_label_map_ko_to_en
         if hasattr(self.causal_graph_viewer, "update_language"):

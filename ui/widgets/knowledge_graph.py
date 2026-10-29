@@ -12,6 +12,8 @@ from PyQt6.QtGui import (
     QColor,
     QFont,
     QPainter,
+    QPainterPath,
+    QPainterPathStroker,
     QPen,
     QWheelEvent,
 )
@@ -47,6 +49,7 @@ from core.knowledge_graph import (
     KG_RELATION_TRANSLATIONS,
     KnowledgeGraphEngine,
     localize_kg_relation,
+    translate_kg_entity_name,
 )
 
 
@@ -139,6 +142,21 @@ class _KGNodeItem(QGraphicsEllipseItem):
         self.setToolTip(f"[{self.category}] {new_name}{cite_str}{desc_str}")
         self.update()
 
+    def hoverEnterEvent(self, event: Any) -> None:
+        self.setPen(QPen(QColor("#38BDF8"), 3.0))
+        if self.parent_widget:
+            self.parent_widget._highlight_node_connections(self.node_id, hover=True)
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event: Any) -> None:
+        if self.parent_widget and self.parent_widget._selected_node == self.node_id:
+            self.setPen(QPen(QColor("#38BDF8"), 2.5))
+        else:
+            self.setPen(QPen(QColor("#0F172A"), 2.0))
+        if self.parent_widget:
+            self.parent_widget._unhighlight_node_connections(self.node_id)
+        super().hoverLeaveEvent(event)
+
     def mousePressEvent(self, event: Any) -> None:
         if self.parent_widget:
             self.parent_widget._on_node_clicked(self.node_id)
@@ -158,7 +176,7 @@ class _KGNodeItem(QGraphicsEllipseItem):
 
 
 class _KGEdgeItem(QGraphicsLineItem):
-    """Directed edge line with midpoint label badge and interactive dimming."""
+    """Directed edge line with midpoint label badge, fat hit-test shape, and dynamic hover/selection reveal."""
 
     def __init__(
         self,
@@ -171,6 +189,7 @@ class _KGEdgeItem(QGraphicsLineItem):
         relation: str = "",
         premise: str = "",
         lang: str = "en",
+        parent_widget: Optional[KnowledgeGraphWidget] = None,
     ) -> None:
         super().__init__(x1, y1, x2, y2)
         self.source_id = source_id
@@ -179,9 +198,12 @@ class _KGEdgeItem(QGraphicsLineItem):
         self.relation = relation
         self.premise = premise
         self._lang = lang
+        self.parent_widget = parent_widget
+        self._badge_visible = False
 
         self.setPen(QPen(QColor("#334155"), 1.8))
         self.setZValue(1.0)  # Connection lines at Z=1.0
+        self.setAcceptHoverEvents(True)
 
         self.badge_bg: Optional[QGraphicsRectItem] = None
         self.label_item: Optional[QGraphicsSimpleTextItem] = None
@@ -193,14 +215,46 @@ class _KGEdgeItem(QGraphicsLineItem):
             self.badge_bg.setBrush(QBrush(QColor("#070A10")))  # Perfectly opaque canvas background
             self.badge_bg.setPen(QPen(QColor("#334155"), 1.2))
             self.badge_bg.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            self.badge_bg.setVisible(False)  # Hidden by default to eliminate visual clutter
 
             self.label_item = QGraphicsSimpleTextItem(display_text)
             self.label_item.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
             self.label_item.setBrush(QBrush(QColor("#CBD5E1")))
             self.label_item.setZValue(2.5)  # Edge label text at Z=2.5
             self.label_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            self.label_item.setVisible(False)  # Hidden by default
 
             self._update_badge_geometry(x1, y1, x2, y2, display_text)
+
+    def shape(self) -> QPainterPath:
+        """Provide generous 12px hit box around edge line for smooth hover and interaction."""
+        path = super().shape()
+        stroker = QPainterPathStroker()
+        stroker.setWidth(12.0)
+        return stroker.createStroke(path)
+
+    def show_badge(self, visible: bool) -> None:
+        """Toggle edge badge visibility dynamically on hover or node selection."""
+        self._badge_visible = visible
+        if self.badge_bg:
+            self.badge_bg.setVisible(visible)
+        if self.label_item:
+            self.label_item.setVisible(visible)
+
+    def hoverEnterEvent(self, event: Any) -> None:
+        self.setPen(QPen(QColor("#38BDF8"), 2.4))
+        self.show_badge(True)
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event: Any) -> None:
+        # If either end is selected in parent_widget, keep highlighted and visible
+        if self.parent_widget and self.parent_widget._selected_node in (self.source_id, self.target_id):
+            self.setPen(QPen(QColor("#38BDF8"), 2.2))
+            self.show_badge(True)
+        else:
+            self.setPen(QPen(QColor("#334155"), 1.8))
+            self.show_badge(False)
+        super().hoverLeaveEvent(event)
 
     def _update_badge_geometry(self, x1: float, y1: float, x2: float, y2: float, text: str) -> None:
         if not self.label_item or not self.badge_bg or not text:
@@ -248,6 +302,7 @@ class _KGEdgeItem(QGraphicsLineItem):
         display_text = localize_kg_relation(new_relation, self._lang)
         line = self.line()
         self._update_badge_geometry(line.x1(), line.y1(), line.x2(), line.y2(), display_text)
+        self.show_badge(self._badge_visible)
         self.update()
 
     def setLine(self, *args) -> None:
@@ -255,6 +310,7 @@ class _KGEdgeItem(QGraphicsLineItem):
         line = self.line()
         display_text = localize_kg_relation(self.relation, self._lang)
         self._update_badge_geometry(line.x1(), line.y1(), line.x2(), line.y2(), display_text)
+        self.show_badge(self._badge_visible)
 
     def setOpacity(self, opacity: float) -> None:
         super().setOpacity(opacity)
@@ -470,6 +526,7 @@ class KnowledgeGraphWidget(QWidget):
                 relation=e.get("relation", ""),
                 premise=e.get("premise", ""),
                 lang=self._lang,
+                parent_widget=self,
             )
             self.scene.addItem(edge_item)
             if edge_item.badge_bg:
@@ -508,14 +565,14 @@ class KnowledgeGraphWidget(QWidget):
             cite_id = getattr(doc, "doc_id", None)
             self.engine.add_entity(title, category="Concept", cite_id=cite_id)
         if self.engine.graph.number_of_nodes() > 0:
-            layout_data = self.engine.compute_layout_data(min_repulsion=120.0)
+            layout_data = self.engine.compute_layout_data(min_repulsion=280.0)
             self.load_precomputed_layout(layout_data)
 
     def auto_layout(self) -> None:
         """Re-cluster coordinates and fit scene to viewport without dropping state."""
         # 1. If self.engine has nodes, compute directly
         if self.engine and self.engine.graph.number_of_nodes() > 0:
-            layout_data = self.engine.compute_layout_data(min_repulsion=120.0)
+            layout_data = self.engine.compute_layout_data(min_repulsion=280.0)
             self.load_precomputed_layout(layout_data)
             return
 
@@ -539,7 +596,7 @@ class KnowledgeGraphWidget(QWidget):
                         relation=e.get("relation", "connected_to"),
                         premise=e.get("premise", ""),
                     )
-            layout_data = self.engine.compute_layout_data(min_repulsion=120.0)
+            layout_data = self.engine.compute_layout_data(min_repulsion=280.0)
             self.load_precomputed_layout(layout_data)
             return
 
@@ -558,7 +615,7 @@ class KnowledgeGraphWidget(QWidget):
                     relation=edge.relation,
                     premise=edge.premise,
                 )
-            layout_data = self.engine.compute_layout_data(min_repulsion=120.0)
+            layout_data = self.engine.compute_layout_data(min_repulsion=280.0)
             self.load_precomputed_layout(layout_data)
             return
 
@@ -566,16 +623,16 @@ class KnowledgeGraphWidget(QWidget):
         self._show_empty_placeholder()
 
     def auto_layout_fit(self) -> None:
-        """Fit scene to viewport with 60px margins and clamp scale to readable 0.85x-1.0x bounds."""
-        rect = self.scene.itemsBoundingRect().adjusted(-60, -60, 60, 60)
+        """Fit scene to viewport with 80px margins and clamp scale to readable bounds."""
+        rect = self.scene.itemsBoundingRect().adjusted(-80, -80, 80, 80)
         if rect.isValid() and not rect.isEmpty():
             self.scene.setSceneRect(rect)
             self.view.resetTransform()
             self.view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
             current_scale = self.view.transform().m11()
-            if current_scale < 0.85:
+            if current_scale < 0.65:
                 self.view.resetTransform()
-                self.view.scale(0.85, 0.85)
+                self.view.scale(0.65, 0.65)
             elif current_scale > 1.15:
                 self.view.resetTransform()
                 self.view.scale(1.0, 1.0)
@@ -623,26 +680,56 @@ class KnowledgeGraphWidget(QWidget):
         placeholder.setPos(-bounds.width() / 2.0, -bounds.height() / 2.0)
         self.scene.setSceneRect(placeholder.boundingRect().adjusted(-80, -80, 80, 80))
 
+    def _highlight_node_connections(self, node_id: str, hover: bool = False) -> None:
+        """Dynamically reveal edge badges for connections to the hovered node."""
+        norm = node_id.lower()
+        target_id = next(
+            (nid for nid in self._node_items if nid == node_id or nid.lower() == norm or getattr(self._node_items[nid], "original_name", "").lower() == norm),
+            node_id
+        )
+        for edge in self._edge_items:
+            is_connected = edge.source_id in (target_id, node_id, norm) or edge.target_id in (target_id, node_id, norm)
+            if is_connected:
+                edge.setOpacity(1.0)
+                edge.setPen(QPen(QColor("#38BDF8"), 2.4))
+                edge.show_badge(True)
+            elif not self._selected_node:
+                edge.setOpacity(0.35)
+
+    def _unhighlight_node_connections(self, node_id: str) -> None:
+        """Revert hover highlight; restore active selection if node is selected."""
+        if self._selected_node:
+            self._select_node(self._selected_node)
+        else:
+            self._reset_selection()
+
     def _select_node(self, node_id: str) -> None:
-        """Select node and highlight its connected edges and neighbors."""
-        self._selected_node = node_id
-        connected_neighbors: Set[str] = {node_id}
+        """Select node and highlight its connected edges and neighbors, revealing their badges."""
+        norm = node_id.lower()
+        target_id = next(
+            (nid for nid in self._node_items if nid == node_id or nid.lower() == norm or getattr(self._node_items[nid], "original_name", "").lower() == norm),
+            node_id
+        )
+        self._selected_node = target_id
+        connected_neighbors: Set[str] = {target_id, node_id, norm}
 
         for edge in self._edge_items:
-            is_connected = edge.source_id == node_id or edge.target_id == node_id
+            is_connected = edge.source_id in (target_id, node_id, norm) or edge.target_id in (target_id, node_id, norm)
             if is_connected:
                 edge.setOpacity(1.0)
                 edge.setPen(QPen(QColor("#38BDF8"), 2.5))
+                edge.show_badge(True)
                 connected_neighbors.add(edge.source_id)
                 connected_neighbors.add(edge.target_id)
             else:
                 edge.setOpacity(0.15)
                 edge.setPen(QPen(QColor("#334155"), 1.2))
+                edge.show_badge(False)
 
         for nid, item in self._node_items.items():
-            if nid in connected_neighbors:
+            if nid in connected_neighbors or item.node_id in connected_neighbors:
                 item.setOpacity(1.0)
-                item.setScale(1.15 if nid == node_id else 1.05)
+                item.setScale(1.15 if (nid == target_id or nid == node_id) else 1.05)
             else:
                 item.setOpacity(0.2)
                 item.setScale(1.0)
@@ -659,19 +746,22 @@ class KnowledgeGraphWidget(QWidget):
     def _on_node_double_clicked(self, entity_name: str) -> None:
         """Keep node selected and emit entity_selected for FTS5 corpus search."""
         for nid, item in self._node_items.items():
-            if item.name == entity_name or nid == entity_name:
+            if item.name == entity_name or nid == entity_name or getattr(item, "original_name", "") == entity_name:
                 self._select_node(nid)
                 item.setSelected(True)
                 break
         self.entity_selected.emit(entity_name)
 
     def _reset_selection(self) -> None:
+        self._selected_node = None
         for edge in self._edge_items:
             edge.setOpacity(1.0)
             edge.setPen(QPen(QColor("#334155"), 1.8))
+            edge.show_badge(False)
         for item in self._node_items.values():
             item.setOpacity(1.0)
             item.setScale(1.0)
+            item.setPen(QPen(QColor("#0F172A"), 2.0))
 
     def _on_filter_changed(self, text: str) -> None:
         """Filter node visibility or highlight matching nodes."""
@@ -802,17 +892,22 @@ class KnowledgeGraphWidget(QWidget):
             target_rel = mapped_rel or rel
             edge.update_relation(target_rel, lang=lang_code)
 
-        # 2. Update entity node names if mappings exist, or restore original English names
+        # 2. Update entity node names (translate to Korean if ko, or restore original English if en)
         for nid, node in self._node_items.items():
             if lang_code == "en":
                 orig = getattr(node, "original_name", "") or nid
                 node.update_label(orig)
-            elif label_map:
-                new_label = (
-                    label_map.get(nid)
-                    or label_map.get(node.name)
-                    or label_map.get(getattr(node, "entity_name", ""))
-                    or label_map.get(getattr(node, "original_name", ""))
-                )
-                if new_label:
+            else:
+                orig = getattr(node, "original_name", "") or node.name or nid
+                new_label = None
+                if label_map:
+                    new_label = (
+                        label_map.get(nid)
+                        or label_map.get(orig)
+                        or label_map.get(node.name)
+                        or label_map.get(orig.lower())
+                    )
+                if not new_label:
+                    new_label = translate_kg_entity_name(orig, lang=lang_code)
+                if new_label and new_label != node.name:
                     node.update_label(new_label)

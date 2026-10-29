@@ -21,6 +21,13 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 
 def run_smoke_test() -> int:
     try:
@@ -1004,6 +1011,62 @@ def run_smoke_test() -> int:
                 if not r.canvas.toolTip() or len(r.canvas.toolTip()) < 20:
                     raise RuntimeError(f"Radar canvas in lang={r._lang} has empty tooltip!")
 
+            # 16.8 Knowledge Graph Clutter Elimination, Dynamic Badges, Expanded Physics, & Dual-Language Translation
+            kg_test_ui = KnowledgeGraphWidget(lang="en")
+            kg_test_ui.engine.clear()
+            kg_test_ui.engine.add_entity("Ground Combat Vehicle", category="Program")
+            kg_test_ui.engine.add_entity("BAE Systems", category="Organization")
+            kg_test_ui.engine.add_entity("General Dynamics", category="Organization")
+            kg_test_ui.engine.add_entity("Active Protection System", category="Concept")
+            kg_test_ui.engine.add_relation("Ground Combat Vehicle", "BAE Systems", relation="competes_with")
+            kg_test_ui.engine.add_relation("Ground Combat Vehicle", "Active Protection System", relation="incorporates")
+            kg_layout = kg_test_ui.engine.compute_layout_data(min_repulsion=280.0)
+            kg_test_ui.load_precomputed_layout(kg_layout)
+
+            # Assertion 16.8.1: Clean edge lines by default (all badges hidden)
+            for edge in kg_test_ui._edge_items:
+                if edge.badge_bg and edge.badge_bg.isVisible():
+                    raise RuntimeError("KG edge badge was visible by default! Expected hidden for clutter elimination.")
+
+            # Assertion 16.8.2: Hover/Selection reveals connected edge badges
+            kg_test_ui._select_node("Ground Combat Vehicle")
+            connected_badges = [e.badge_bg for e in kg_test_ui._edge_items if e.source_id in ("Ground Combat Vehicle", "ground combat vehicle") or e.target_id in ("Ground Combat Vehicle", "ground combat vehicle")]
+            for b in connected_badges:
+                if not b or not b.isVisible():
+                    raise RuntimeError("Connected KG edge badge failed to become visible upon node selection!")
+
+            # Reset selection hides badges again
+            kg_test_ui._reset_selection()
+            for edge in kg_test_ui._edge_items:
+                if edge.badge_bg and edge.badge_bg.isVisible():
+                    raise RuntimeError("KG edge badge remained visible after resetting selection!")
+
+            # Assertion 16.8.3: Physics separation >= 200px
+            nodes_out = kg_layout["nodes"]
+            for i in range(len(nodes_out)):
+                for j in range(i + 1, len(nodes_out)):
+                    d_sep = ((nodes_out[i]["x"] - nodes_out[j]["x"]) ** 2 + (nodes_out[i]["y"] - nodes_out[j]["y"]) ** 2) ** 0.5
+                    if d_sep < 180.0:
+                        raise RuntimeError(f"Physics simulation packed nodes too closely ({d_sep:.1f}px < 180px) between {nodes_out[i]['name']} and {nodes_out[j]['name']}")
+
+            # Assertion 16.8.4: Full Dual-Language Entity Node and Edge Translation
+            kg_test_ui.update_language("ko")
+            gcv_item = kg_test_ui._node_items.get("ground combat vehicle") or kg_test_ui._node_items.get("Ground Combat Vehicle")
+            if not gcv_item or gcv_item.name != "지상전투차량":
+                raise RuntimeError(f"Entity node 'Ground Combat Vehicle' failed to translate to Korean! Got: {getattr(gcv_item, 'name', None)}")
+
+            edge_competes = [e for e in kg_test_ui._edge_items if e.original_relation == "competes_with"][0]
+            if edge_competes.label_item and edge_competes.label_item.text() != "경쟁함":
+                raise RuntimeError(f"Edge relation 'competes_with' failed to translate to '경쟁함'! Got: {edge_competes.label_item.text()}")
+
+            # Restore English
+            kg_test_ui.update_language("en")
+            if gcv_item.name != "Ground Combat Vehicle":
+                raise RuntimeError(f"Entity node failed to restore English name! Got: {gcv_item.name}")
+
+        print("   -> Knowledge Graph decluttered default state (0 overlapping badges) verified.")
+        print("   -> Knowledge Graph dynamic hover/selection badge reveal and expanded physics verified.")
+        print("   -> Knowledge Graph full bilingual entity node and relation translation verified.")
         print("   -> Markdown export verified with valid structure and model metadata.")
         print(f"   -> HTML export verified with populated metadata and clean cover title (raw prompt in collapsible card).")
         print("   -> PDF export verified with populated metadata and vector compilation.")

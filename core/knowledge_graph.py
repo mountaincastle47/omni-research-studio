@@ -112,6 +112,201 @@ KG_RELATION_TRANSLATIONS: Dict[str, str] = {
 
 KG_RELATION_REVERSE: Dict[str, str] = {v: k for k, v in KG_RELATION_TRANSLATIONS.items()}
 
+# Common domain and technical entity vocabulary for bilingual switching
+KG_COMMON_ENTITY_TRANSLATIONS: Dict[str, str] = {
+    # Archival & Web Systems
+    "Wayback Machine": "웨이백 머신",
+    "Internet Archive": "인터넷 아카이브",
+    "Wikipedia": "위키백과",
+    "Wikimedia": "위키미디어",
+    # Defense & Military Programs
+    "Ground Combat Vehicle": "지상전투차량",
+    "GCV": "지상전투차량",
+    "Future Combat Systems": "미래 전투 체계",
+    "FCS": "미래 전투 체계",
+    "Next Generation Combat Vehicle": "차세대 전투차량",
+    "NGCV": "차세대 전투차량",
+    "Armored Multi-Purpose Vehicle": "다목적 장갑차량",
+    "AMPV": "다목적 장갑차량",
+    "Optionally Manned Fighting Vehicle": "선택적 유인 전투차량",
+    "OMFV": "선택적 유인 전투차량",
+    "Infantry Fighting Vehicle": "보병전투장갑차",
+    "IFV": "보병전투장갑차",
+    "Main Battle Tank": "주력전차",
+    "MBT": "주력전차",
+    "Armored Personnel Carrier": "보병수송장갑차",
+    "APC": "보병수송장갑차",
+    "Bradley Fighting Vehicle": "브래들리 전투장갑차",
+    "M2 Bradley": "M2 브래들리",
+    "M1 Abrams": "M1 에이브람스",
+    "Stryker": "스트라이커",
+    "Leopard 2": "레오파르트 2",
+    # Agencies & Organizations
+    "United States Army": "미합중국 육군",
+    "U.S. Army": "미 육군",
+    "US Army": "미 육군",
+    "Department of Defense": "미 국방부",
+    "DoD": "미 국방부",
+    "Defense Advanced Research Projects Agency": "방위고등연구계획국",
+    "DARPA": "국방고등연구계획국",
+    "Pentagon": "펜타곤",
+    "White House": "백악관",
+    "Congress": "미 의회",
+    "Government Accountability Office": "미 회계감사원",
+    "GAO": "미 회계감사원",
+    "Congressional Budget Office": "의회예산처",
+    "CBO": "의회예산처",
+    "Congressional Research Service": "의회조사국",
+    "CRS": "의회조사국",
+    "RAND Corporation": "랜드 연구소",
+    "RAND": "랜드 연구소",
+    "Army Science Board": "육군 과학위원회",
+    "Joint Chiefs of Staff": "합동참모본부",
+    "NASA": "미 항공우주국",
+    "National Science Foundation": "미국 국립과학재단",
+    "NSF": "국립과학재단",
+    "National Institute of Standards and Technology": "미국 국립표준기술원",
+    "NIST": "국립표준기술원",
+    "Defense Logistics Agency": "국방 군수국",
+    "DLA": "국방 군수국",
+    "Air Force": "공군",
+    "Navy": "해군",
+    "Marine Corps": "해병대",
+    "Space Force": "우주군",
+    # Defense Contractors & Industrial Base
+    "General Dynamics": "제너럴 다이내믹스",
+    "General Dynamics Land Systems": "제너럴 다이내믹스 랜드 시스템즈",
+    "GDLS": "제너럴 다이내믹스 랜드 시스템즈",
+    "BAE Systems": "BAE 시스템즈",
+    "Lockheed Martin": "록히드 마틴",
+    "Boeing": "보잉",
+    "Northrop Grumman": "노스롭 그루먼",
+    "Raytheon": "레이시온",
+    "RTX": "레이시온 테크놀로지스",
+    "Rheinmetall": "라인메탈",
+    "Krauss-Maffei Wegmann": "크라우스-마파이 베그만",
+    # Technologies, Subsystems & Materials
+    "Active Protection System": "능동 방호 체계",
+    "APS": "능동 방호 체계",
+    "Hybrid Electric Drive": "하이브리드 전기 구동",
+    "HED": "하이브리드 전기 구동",
+    "Modular Active Protection System": "모듈형 능동 방호 체계",
+    "MAPS": "모듈형 능동 방호 체계",
+    "Inconel 718": "인코넬 718",
+    "Composite Armor": "복합 장갑",
+    "Reactive Armor": "반응 장갑",
+    "Explosive Reactive Armor": "폭발 반응 장갑",
+    "ERA": "폭발 반응 장갑",
+    "C4ISR": "지휘통제 통신 및 컴퓨터 감시 정찰",
+    "Command and Control": "지휘통제",
+    "Situational Awareness": "상황 인식",
+    # Computing, AI & Software Architecture
+    "Artificial Intelligence": "인공지능",
+    "AI": "인공지능",
+    "Machine Learning": "기계학습",
+    "ML": "기계학습",
+    "Deep Learning": "딥러닝",
+    "Neural Network": "신경망",
+    "Large Language Model": "대규모 언어 모델",
+    "LLM": "대규모 언어 모델",
+    "Natural Language Processing": "자연어 처리",
+    "NLP": "자연어 처리",
+    "Computer Vision": "컴퓨터 비전",
+    "Reinforcement Learning": "강화학습",
+    "Autonomous Systems": "자율 시스템",
+    "Cybersecurity": "사이버 보안",
+    "Quantum Computing": "양자 컴퓨팅",
+    "Asyncio": "비동기 I/O",
+    "Event Loop": "이벤트 루프",
+    "Operating System": "운영 체제",
+    # Programmatic & Acquisition Concepts
+    "Requirements Creep": "요구사항 변질",
+    "Weight Growth": "중량 증가",
+    "Cost Growth": "비용 증가",
+    "Cost Overrun": "비용 초과",
+    "Budget Allocation": "예산 배정",
+    "Program Cancellation": "프로그램 취소",
+    "Acquisition Reform": "획득 제도 개혁",
+    "Systems Engineering": "시스템 공학",
+    "Technical Data Package": "기술 자료 패키지",
+    "TDP": "기술 자료 패키지",
+    "Milestone Decision Authority": "마일스톤 결정 기관",
+    "Defense Acquisition Board": "국방 획득 위원회",
+    "Federal Acquisition Regulation": "연방 획득 규정",
+    "FAR": "연방 획득 규정",
+    "Survivability": "생존성",
+    "Lethality": "치명성",
+    "Mobility": "기동성",
+    "Interoperability": "상호운용성",
+    "Supply Chain": "공급망",
+    "Apollo Program": "아폴로 프로그램",
+    "Space Shuttle": "우주왕복선",
+}
+
+KG_COMMON_ENTITY_REVERSE: Dict[str, str] = {v: k for k, v in KG_COMMON_ENTITY_TRANSLATIONS.items()}
+
+_COMPOUND_TERMS_KO: List[Tuple[re.Pattern, str]] = [
+    (re.compile(r"\bGround Combat Vehicle\b", re.I), "지상전투차량"),
+    (re.compile(r"\bWayback Machine\b", re.I), "웨이백 머신"),
+    (re.compile(r"\bCombat Vehicle\b", re.I), "전투차량"),
+    (re.compile(r"\bFighting Vehicle\b", re.I), "전투장갑차"),
+    (re.compile(r"\bPersonnel Carrier\b", re.I), "수송장갑차"),
+    (re.compile(r"\bBattle Tank\b", re.I), "주력전차"),
+    (re.compile(r"\bUnited States\b", re.I), "미국"),
+    (re.compile(r"\bDepartment of Defense\b", re.I), "국방부"),
+    (re.compile(r"\bResearch Projects Agency\b", re.I), "연구계획국"),
+    (re.compile(r"\bDefense Agency\b", re.I), "방위청"),
+    (re.compile(r"\bResearch Laboratory\b", re.I), "연구소"),
+    (re.compile(r"\bResearch Program\b", re.I), "연구 프로그램"),
+    (re.compile(r"\bEngineering Agency\b", re.I), "공학 기관"),
+    (re.compile(r"\bJoint\b", re.I), "합동"),
+    (re.compile(r"\bAgency\b", re.I), "기관"),
+    (re.compile(r"\bLaboratory\b", re.I), "연구소"),
+    (re.compile(r"\bInstitute\b", re.I), "연구원"),
+    (re.compile(r"\bCorporation\b", re.I), "기업"),
+    (re.compile(r"\bProgram\b", re.I), "프로그램"),
+    (re.compile(r"\bProject\b", re.I), "프로젝트"),
+    (re.compile(r"\bSystem\b", re.I), "체계"),
+    (re.compile(r"\bSystems\b", re.I), "시스템즈"),
+    (re.compile(r"\bCenter\b", re.I), "센터"),
+    (re.compile(r"\bArchitecture\b", re.I), "아키텍처"),
+    (re.compile(r"\bTechnology\b", re.I), "기술"),
+    (re.compile(r"\bTechnologies\b", re.I), "기술"),
+    (re.compile(r"\bInitiative\b", re.I), "이니셔티브"),
+]
+
+
+def translate_kg_entity_name(name: str, lang: str = "ko") -> str:
+    """Translate entity node name between English and Korean using dictionary and semantic rules."""
+    if not name:
+        return ""
+    clean = name.strip()
+    if lang == "en":
+        return KG_COMMON_ENTITY_REVERSE.get(clean, clean)
+
+    # Korean translation:
+    # 1. Exact match in dictionary
+    if clean in KG_COMMON_ENTITY_TRANSLATIONS:
+        return KG_COMMON_ENTITY_TRANSLATIONS[clean]
+
+    # 2. Case-insensitive lookup
+    lower_map = {k.lower(): v for k, v in KG_COMMON_ENTITY_TRANSLATIONS.items()}
+    if clean.lower() in lower_map:
+        return lower_map[clean.lower()]
+
+    # 3. Rule-based compound substitution
+    result = clean
+    matched_any = False
+    for pattern, rep in _COMPOUND_TERMS_KO:
+        if pattern.search(result):
+            result = pattern.sub(rep, result)
+            matched_any = True
+
+    if matched_any:
+        return result.strip()
+
+    return clean
+
 DISALLOWED_START_WORDS = {
     "while", "hence", "therefore", "furthermore", "however", "although", "the", "a", "an",
     "this", "that", "these", "those", "when", "where", "because", "since", "instead",
@@ -578,8 +773,8 @@ class KnowledgeGraphEngine:
                 cite_id=e.get("cite_id"),
             )
 
-    def compute_layout_data(self, min_repulsion: float = 140.0) -> Dict[str, Any]:
-        """Compute force-directed clustered layout coordinates with semantic category clustering and >= 140px separation."""
+    def compute_layout_data(self, min_repulsion: float = 280.0) -> Dict[str, Any]:
+        """Compute force-directed clustered layout coordinates with semantic category clustering, expanded spring rest lengths (250-350px), and label collision evasion."""
         import math
 
         categories = ["Organization", "Program", "Key Figure", "Standard", "Material", "Concept"]
@@ -596,7 +791,7 @@ class KnowledgeGraphEngine:
             all_nodes_data[nid] = data
 
         pos: Dict[str, List[float]] = {}
-        r_cluster = 360.0
+        r_cluster = 520.0
         active_cats = [c for c in categories if cat_nodes[c]]
         n_active = max(1, len(active_cats))
 
@@ -618,52 +813,79 @@ class KnowledgeGraphEngine:
                     # Pseudo-random deterministic offset to prevent rigid circular locking
                     hash_val = abs(hash(nid))
                     j_ang = (j * (2.0 * math.pi / len(c_list))) + ((hash_val % 31) / 100.0)
-                    r_local = max(100.0, min(240.0, 50.0 + len(c_list) * 20.0))
+                    r_local = max(180.0, min(420.0, 120.0 + len(c_list) * 35.0))
                     pos[nid] = [cx + r_local * math.cos(j_ang), cy + r_local * math.sin(j_ang)]
 
-        # Force-directed relaxation (repulsion + category cohesion + edge spring attraction)
+        # Force-directed relaxation (repulsion + label collision evasion + category cohesion + edge spring equilibrium)
         node_keys = list(pos.keys())
-        repulse_bound = max(140.0, min_repulsion)
+        repulse_bound = max(280.0, min_repulsion)
 
-        for _ in range(50):
-            # 1. Repulsion between all node pairs
+        for _ in range(80):
+            # 1. Repulsion and label bounding margin evasion between all node pairs
             for a in range(len(node_keys)):
                 u = node_keys[a]
+                name_u = all_nodes_data.get(u, {}).get("name", u)
+                w_u = max(60.0, len(name_u) * 8.0 + 40.0)
                 for b in range(a + 1, len(node_keys)):
                     v = node_keys[b]
+                    name_v = all_nodes_data.get(v, {}).get("name", v)
+                    w_v = max(60.0, len(name_v) * 8.0 + 40.0)
                     dx = pos[u][0] - pos[v][0]
                     dy = pos[u][1] - pos[v][1]
                     dist = math.hypot(dx, dy)
+
+                    # Radial repulsion
                     if dist < repulse_bound:
                         d = max(dist, 1.0)
-                        push = (repulse_bound - dist) / d * 0.55
+                        push = (repulse_bound - dist) / d * 0.65
                         pos[u][0] += dx * push
                         pos[u][1] += dy * push
                         pos[v][0] -= dx * push
                         pos[v][1] -= dy * push
+
+                    # Additional label rectangle collision buffer
+                    min_dx = (w_u + w_v) / 2.0 + 30.0
+                    min_dy = 120.0
+                    if abs(dx) < min_dx and abs(dy) < min_dy:
+                        pen_x = (min_dx - abs(dx)) * 0.35
+                        pen_y = (min_dy - abs(dy)) * 0.35
+                        sign_x = 1.0 if dx >= 0 else -1.0
+                        sign_y = 1.0 if dy >= 0 else -1.0
+                        pos[u][0] += pen_x * sign_x
+                        pos[u][1] += pen_y * sign_y
+                        pos[v][0] -= pen_x * sign_x
+                        pos[v][1] -= pen_y * sign_y
 
             # 2. Cohesion toward category anchor
             for nid, p in pos.items():
                 cat = all_nodes_data.get(nid, {}).get("category", "Concept")
                 if cat in cat_anchors:
                     ax, ay = cat_anchors[cat]
-                    pos[nid][0] += (ax - p[0]) * 0.03
-                    pos[nid][1] += (ay - p[1]) * 0.03
+                    pos[nid][0] += (ax - p[0]) * 0.025
+                    pos[nid][1] += (ay - p[1]) * 0.025
 
-            # 3. Edge spring attraction (ideal distance ~160px)
+            # 3. Edge spring equilibrium (ideal spring rest distance ~300px, pushback below 220px)
             for u, v in self.graph.edges():
                 if u in pos and v in pos:
                     dx = pos[v][0] - pos[u][0]
                     dy = pos[v][1] - pos[u][1]
                     dist = math.hypot(dx, dy)
-                    if dist > 160.0:
-                        pull = (dist - 160.0) * 0.045
+                    if dist > 300.0:
+                        pull = (dist - 300.0) * 0.035
                         pull_x = (dx / max(dist, 1.0)) * pull
                         pull_y = (dy / max(dist, 1.0)) * pull
                         pos[u][0] += pull_x
                         pos[u][1] += pull_y
                         pos[v][0] -= pull_x
                         pos[v][1] -= pull_y
+                    elif dist < 220.0:
+                        push = (220.0 - dist) * 0.04
+                        push_x = (dx / max(dist, 1.0)) * push
+                        push_y = (dy / max(dist, 1.0)) * push
+                        pos[u][0] -= push_x
+                        pos[u][1] -= push_y
+                        pos[v][0] += push_x
+                        pos[v][1] += push_y
 
         # Build output structure
         out_nodes: List[Dict[str, Any]] = []
@@ -704,6 +926,9 @@ __all__ = [
     "ENTITY_CATEGORIES",
     "KG_RELATION_TRANSLATIONS",
     "KG_RELATION_REVERSE",
+    "KG_COMMON_ENTITY_TRANSLATIONS",
+    "KG_COMMON_ENTITY_REVERSE",
+    "translate_kg_entity_name",
     "KnowledgeGraphEngine",
     "localize_kg_relation",
     "clean_and_parse_json",
