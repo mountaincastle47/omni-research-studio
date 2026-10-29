@@ -319,6 +319,43 @@ DISALLOWED_START_WORDS = {
     "fixed", "table", "figure", "section", "chapter", "source", "document",
 }
 
+DISALLOWED_END_WORDS = {
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+    "still", "and", "or", "but", "nor", "of", "in", "to", "for", "with",
+    "on", "at", "by", "from", "up", "about", "into", "through", "during",
+    "before", "after", "above", "below", "between", "under", "again",
+    "further", "then", "once", "that", "this", "these", "those", "it",
+    "its", "as", "if", "than", "so", "such", "no", "not", "also", "yet",
+    "which", "who", "whom", "whose", "when", "where", "why", "how",
+    "can", "could", "would", "should", "will", "shall", "may", "might",
+    "must", "has", "have", "had", "do", "does", "did",
+}
+
+BANNED_TABLE_HEADERS = {
+    "primary citation",
+    "empirical outcome",
+    "parameter / event",
+    "parameter event",
+    "milestone / event",
+    "milestone event",
+    "official / baseline claim",
+    "official baseline claim",
+    "official claim",
+    "baseline claim",
+    "empirical finding",
+    "contested claim",
+    "core anomaly",
+    "citation",
+    "citations",
+    "parameter",
+    "milestone",
+    "outcome",
+    "evidence",
+    "date",
+    "source",
+    "sources",
+}
+
 _MONTHS_STR = "january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec"
 _DATE_PATTERN = re.compile(
     rf"^(?:(?:\d{{1,4}}s?)|(?:(?:{_MONTHS_STR})\s+\d{{1,4}})|(?:\d{{1,2}}\s+(?:{_MONTHS_STR})(?:\s+\d{{2,4}})?)|(?:\d{{1,2}}/\d{{1,2}}(?:/\d{{2,4}})?)|(?:(?:early|mid|late)[-\s]\d{{4}}s?))$",
@@ -330,8 +367,33 @@ _MEASUREMENT_PATTERN = re.compile(
 )
 
 
+def strip_markdown_for_extraction(text: str) -> str:
+    """Pre-sanitize text by stripping Markdown table syntax, citation markers, code blocks, and headers."""
+    if not text:
+        return ""
+    # 1. Remove markdown table rows (| ... |) and divider lines (|---|---|)
+    cleaned = re.sub(r"(?m)^\s*\|.*\|.*$", " ", text)
+    cleaned = re.sub(r"\|[^\n\r]+\|", " ", cleaned)
+    # 2. Strip citation markers ([1], [^1], [cite: 1], [1:02:45])
+    cleaned = re.sub(r"\[\^?\d+(?::\d+)*\]", " ", cleaned)
+    cleaned = re.sub(r"\[cite:[^\]]+\]", " ", cleaned)
+    # 3. Strip code blocks and inline code
+    cleaned = re.sub(r"```[\s\S]*?```", " ", cleaned)
+    cleaned = re.sub(r"`[^`\n]+`", " ", cleaned)
+    # 4. Strip markdown headings (# Header)
+    cleaned = re.sub(r"(?m)^\s*#{1,6}\s+.*$", " ", cleaned)
+    # 5. Strip markdown links [text](url) -> keep text
+    cleaned = re.sub(r"!\[[^\]]*\]\([^\)]+\)", " ", cleaned)
+    cleaned = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", cleaned)
+    # 6. Strip HTML tags
+    cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+    # Normalize multiple whitespace
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    return cleaned.strip()
+
+
 def sanitize_and_validate_entity(name: str) -> Optional[str]:
-    """Validate and clean candidate entity name, strictly filtering out dates, fragments, and stopwords."""
+    """Validate and clean candidate entity name, strictly filtering out dates, fragments, table headers, and stopwords."""
     if not name:
         return None
     clean = name.strip().strip("\"'“”‘’`*#_[]():;,.")
@@ -343,7 +405,14 @@ def sanitize_and_validate_entity(name: str) -> Optional[str]:
     # 2. Reject pure numbers or measurements
     if clean.isdigit() or _MEASUREMENT_PATTERN.match(clean):
         return None
-    # 3. Check for sentence starter words or transitions
+    # 3. Reject known table headers and report metadata fields
+    lower_full = clean.lower()
+    if lower_full in BANNED_TABLE_HEADERS or any(header in lower_full for header in [
+        "primary citation", "empirical outcome", "parameter / event", "milestone / event",
+        "official / baseline claim", "baseline claim", "empirical finding",
+    ]):
+        return None
+    # 4. Check for sentence starter words, transitions, or disallowed end tokens
     tokens = clean.split()
     if not tokens:
         return None
@@ -353,10 +422,16 @@ def sanitize_and_validate_entity(name: str) -> Optional[str]:
         if len(tokens) >= 2 and first_token_lower in ("the", "a", "an"):
             candidate = " ".join(tokens[1:]).strip()
             if len(candidate) >= 3 and not candidate.lower().startswith(tuple(DISALLOWED_START_WORDS)):
-                return candidate
+                return sanitize_and_validate_entity(candidate)
         return None
-    # 4. Reject common non-entity phrases
-    lower_full = clean.lower()
+    # 5. Reject candidate ending in stopwords, prepositions, or determiners (e.g. "Class Is Still", "Purpose The")
+    last_token_lower = tokens[-1].lower()
+    if last_token_lower in DISALLOWED_END_WORDS:
+        return None
+    # 6. Reject broken clause fragments containing copulas / predicates (e.g. "Class Is Still")
+    if any(w in [t.lower() for t in tokens] for w in ("is", "are", "was", "were", "been", "being")):
+        return None
+    # 7. Reject common non-entity phrases
     if any(phrase in lower_full for phrase in [
         "the following", "in order to", "according to", "as shown", "table of", "based on",
         "for example", "et al", "figure ", "section ", "chapter ", "page "
@@ -587,6 +662,10 @@ class KnowledgeGraphEngine:
         if not text or not text.strip():
             return [], []
 
+        clean_text = strip_markdown_for_extraction(text)
+        if not clean_text:
+            return [], []
+
         if not use_llm:
             return self._heuristic_extract(text, cite_id=cite_id)
 
@@ -596,7 +675,7 @@ class KnowledgeGraphEngine:
                 from google.genai import types
 
                 client = self.config_manager.create_client(api_key=api_key)
-                sample_text = text[:4000]
+                sample_text = clean_text[:4000]
                 prompt = ENTITY_EXTRACTION_PROMPT.format(text=sample_text, cite_id=cite_id)
 
                 response = client.models.generate_content(
@@ -668,26 +747,7 @@ class KnowledgeGraphEngine:
         relations: List[Dict[str, Any]] = []
         seen_names: Set[str] = set()
 
-        # 1. Technical standards specifications (e.g. ISO-9001, IEEE 802.11, MIL-STD-810)
-        std_matches = set(re.findall(r"\b(?:ISO|IEEE|MIL-STD|DO|RFC|ECMA|ANSI|NIST)[-\s][\dA-Z.-]+\b", text))
-        for m in std_matches:
-            c_name = sanitize_and_validate_entity(m)
-            if c_name and c_name.lower() not in seen_names:
-                seen_names.add(c_name.lower())
-                self.add_entity(c_name, category="Standard", description="Technical standard specification", cite_id=cite_id)
-                entities.append({"name": c_name, "category": "Standard"})
-
-        # 2. Capitalized multi-word organization / program phrases
-        cap_phrases = set(re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}\b", text))
-        for p in list(cap_phrases)[:15]:
-            c_name = sanitize_and_validate_entity(p)
-            if c_name and c_name.lower() not in seen_names:
-                seen_names.add(c_name.lower())
-                cat = "Organization" if any(w in c_name for w in ["Lab", "Institute", "Corp", "Inc", "Agency", "Group", "Dept", "Force", "Consortium", "Office", "Bureau"]) else "Program"
-                self.add_entity(c_name, category=cat, description=f"Entity identified in document [{cite_id}]", cite_id=cite_id)
-                entities.append({"name": c_name, "category": cat})
-
-        # 3. Bold technical concepts in synthesis or notes: **Term**
+        # 1. Bold technical concepts in synthesis or notes: **Term** (pre-extracted from original text)
         bold_terms = set(re.findall(r"\*\*([A-Za-z0-9\s_-]{3,35})\*\*", text))
         for b in list(bold_terms)[:12]:
             c_name = sanitize_and_validate_entity(b)
@@ -695,6 +755,28 @@ class KnowledgeGraphEngine:
                 seen_names.add(c_name.lower())
                 self.add_entity(c_name, category="Concept", description=f"Technical concept emphasized in [{cite_id}]", cite_id=cite_id)
                 entities.append({"name": c_name, "category": "Concept"})
+
+        # Clean markdown table rows, headers, code blocks, and citation brackets
+        clean_text = strip_markdown_for_extraction(text)
+
+        # 2. Technical standards specifications (e.g. ISO-9001, IEEE 802.11, MIL-STD-810)
+        std_matches = set(re.findall(r"\b(?:ISO|IEEE|MIL-STD|DO|RFC|ECMA|ANSI|NIST)[-\s][\dA-Z.-]+\b", clean_text))
+        for m in std_matches:
+            c_name = sanitize_and_validate_entity(m)
+            if c_name and c_name.lower() not in seen_names:
+                seen_names.add(c_name.lower())
+                self.add_entity(c_name, category="Standard", description="Technical standard specification", cite_id=cite_id)
+                entities.append({"name": c_name, "category": "Standard"})
+
+        # 3. Capitalized multi-word organization / program phrases
+        cap_phrases = set(re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}\b", clean_text))
+        for p in list(cap_phrases)[:15]:
+            c_name = sanitize_and_validate_entity(p)
+            if c_name and c_name.lower() not in seen_names:
+                seen_names.add(c_name.lower())
+                cat = "Organization" if any(w in c_name for w in ["Lab", "Institute", "Corp", "Inc", "Agency", "Group", "Dept", "Force", "Consortium", "Office", "Bureau"]) else "Program"
+                self.add_entity(c_name, category=cat, description=f"Entity identified in document [{cite_id}]", cite_id=cite_id)
+                entities.append({"name": c_name, "category": cat})
 
         # 4. Form typed relationships between discovered entities (strictly no 'associated_with')
         for i in range(len(entities) - 1):
@@ -816,45 +898,51 @@ class KnowledgeGraphEngine:
                     r_local = max(180.0, min(420.0, 120.0 + len(c_list) * 35.0))
                     pos[nid] = [cx + r_local * math.cos(j_ang), cy + r_local * math.sin(j_ang)]
 
-        # Force-directed relaxation (repulsion + label collision evasion + category cohesion + edge spring equilibrium)
+        # Precompute effective physical collision radius R_eff for each node:
+        # R_eff = max(circle_radius, label_width / 2.0) + padding
         node_keys = list(pos.keys())
+        circle_radius = 24.0
+        padding = 15.0
+        r_eff: Dict[str, float] = {}
+        for nid in node_keys:
+            name_str = all_nodes_data.get(nid, {}).get("name", nid)
+            label_w = max(40.0, len(name_str) * 8.5)
+            r_eff[nid] = max(circle_radius, label_w / 2.0) + padding
+
+        # Force-directed relaxation (repulsion + rigid collision boundaries + category cohesion + edge spring equilibrium)
         repulse_bound = max(280.0, min_repulsion)
 
         for _ in range(80):
-            # 1. Repulsion and label bounding margin evasion between all node pairs
+            # 1. Hard physical collision boundary enforcement + radial repulsion
             for a in range(len(node_keys)):
                 u = node_keys[a]
-                name_u = all_nodes_data.get(u, {}).get("name", u)
-                w_u = max(60.0, len(name_u) * 8.0 + 40.0)
+                r_u = r_eff[u]
                 for b in range(a + 1, len(node_keys)):
                     v = node_keys[b]
-                    name_v = all_nodes_data.get(v, {}).get("name", v)
-                    w_v = max(60.0, len(name_v) * 8.0 + 40.0)
+                    r_v = r_eff[v]
+                    min_allowed = r_u + r_v + 30.0
                     dx = pos[u][0] - pos[v][0]
                     dy = pos[u][1] - pos[v][1]
                     dist = math.hypot(dx, dy)
 
-                    # Radial repulsion
-                    if dist < repulse_bound:
+                    if dist < min_allowed:
+                        if dist < 0.01:
+                            ang = ((abs(hash(u)) ^ abs(hash(v))) % 360) * (math.pi / 180.0)
+                            dx, dy, dist = math.cos(ang), math.sin(ang), 1.0
+                        overlap = min_allowed - dist
+                        ux = dx / dist
+                        uy = dy / dist
+                        pos[u][0] += ux * (overlap * 0.55)
+                        pos[u][1] += uy * (overlap * 0.55)
+                        pos[v][0] -= ux * (overlap * 0.55)
+                        pos[v][1] -= uy * (overlap * 0.55)
+                    elif dist < repulse_bound:
                         d = max(dist, 1.0)
-                        push = (repulse_bound - dist) / d * 0.65
+                        push = (repulse_bound - dist) / d * 0.45
                         pos[u][0] += dx * push
                         pos[u][1] += dy * push
                         pos[v][0] -= dx * push
                         pos[v][1] -= dy * push
-
-                    # Additional label rectangle collision buffer
-                    min_dx = (w_u + w_v) / 2.0 + 30.0
-                    min_dy = 120.0
-                    if abs(dx) < min_dx and abs(dy) < min_dy:
-                        pen_x = (min_dx - abs(dx)) * 0.35
-                        pen_y = (min_dy - abs(dy)) * 0.35
-                        sign_x = 1.0 if dx >= 0 else -1.0
-                        sign_y = 1.0 if dy >= 0 else -1.0
-                        pos[u][0] += pen_x * sign_x
-                        pos[u][1] += pen_y * sign_y
-                        pos[v][0] -= pen_x * sign_x
-                        pos[v][1] -= pen_y * sign_y
 
             # 2. Cohesion toward category anchor
             for nid, p in pos.items():
@@ -886,6 +974,34 @@ class KnowledgeGraphEngine:
                         pos[u][1] -= push_y
                         pos[v][0] += push_x
                         pos[v][1] += push_y
+
+        # Unconditional post-simulation rigid boundary enforcement
+        for _ in range(35):
+            collision_found = False
+            for a in range(len(node_keys)):
+                u = node_keys[a]
+                r_u = r_eff[u]
+                for b in range(a + 1, len(node_keys)):
+                    v = node_keys[b]
+                    r_v = r_eff[v]
+                    min_allowed = r_u + r_v + 30.0
+                    dx = pos[u][0] - pos[v][0]
+                    dy = pos[u][1] - pos[v][1]
+                    dist = math.hypot(dx, dy)
+                    if dist < min_allowed:
+                        collision_found = True
+                        if dist < 0.01:
+                            ang = ((abs(hash(u)) ^ abs(hash(v))) % 360) * (math.pi / 180.0)
+                            dx, dy, dist = math.cos(ang), math.sin(ang), 1.0
+                        overlap = min_allowed - dist
+                        ux = dx / dist
+                        uy = dy / dist
+                        pos[u][0] += ux * (overlap * 0.5)
+                        pos[u][1] += uy * (overlap * 0.5)
+                        pos[v][0] -= ux * (overlap * 0.5)
+                        pos[v][1] -= uy * (overlap * 0.5)
+            if not collision_found:
+                break
 
         # Build output structure
         out_nodes: List[Dict[str, Any]] = []
@@ -933,6 +1049,8 @@ __all__ = [
     "localize_kg_relation",
     "clean_and_parse_json",
     "sanitize_and_validate_entity",
+    "strip_markdown_for_extraction",
+    "BANNED_TABLE_HEADERS",
     "infer_semantic_relation",
 ]
 

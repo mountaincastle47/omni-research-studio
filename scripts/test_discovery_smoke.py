@@ -955,7 +955,7 @@ def run_smoke_test() -> int:
                 if re.search(r'width="[\d.]+mm"', svg_txt):
                     raise RuntimeError(f"{svg_path.name} contains invalid millimeter width")
 
-            # High-res raster image exports
+            # High-res raster image exports (4K resolution verification)
             causal_png_path = export_dir / "causal_graph.png"
             kg_png_path = export_dir / "knowledge_graph.png"
             causal_widget.export_image(causal_png_path)
@@ -964,6 +964,14 @@ def run_smoke_test() -> int:
                 raise RuntimeError("Causal Graph PNG export was not created or is too small!")
             if not kg_png_path.exists() or kg_png_path.stat().st_size < 1000:
                 raise RuntimeError("Knowledge Graph PNG export was not created or is too small!")
+
+            from PyQt6.QtGui import QImage
+            causal_img = QImage(str(causal_png_path))
+            if causal_img.isNull() or causal_img.width() < 3840:
+                raise RuntimeError(f"Causal Graph PNG width ({causal_img.width()}px) is less than 3840px (4K requirement)!")
+            kg_img = QImage(str(kg_png_path))
+            if kg_img.isNull() or kg_img.width() < 3840:
+                raise RuntimeError(f"Knowledge Graph PNG width ({kg_img.width()}px) is less than 3840px (4K requirement)!")
 
             # 16.5 Knowledge Graph Semantic Filtering Verification
             from core.knowledge_graph import KnowledgeGraphEngine
@@ -991,6 +999,34 @@ def run_smoke_test() -> int:
             banned_relations = [r for r in rels if r.get("relation") in ("associated_with", "associated with")]
             if banned_relations:
                 raise RuntimeError(f"Knowledge Graph contained generic 'associated_with' relations: {banned_relations}")
+
+            # Assertion 1.4: 0 table headers or trailing-stopword/copula junk entities from table markdown
+            test_markdown_with_table = (
+                "| Milestone / Event | Empirical Outcome | Primary Citation |\n"
+                "| Official / Baseline Claim | Preliminary Study | Technical Appendix |\n"
+                "| Apollo 11 Mission | Moon landing [1] | Primary Citation |\n\n"
+                "Class Is Still an issue. Purpose The objective was identified.\n"
+                "The Space Shuttle Orbiter was deployed by NASA.\n"
+            )
+            table_ents, table_rels = kg_test_engine._heuristic_extract(test_markdown_with_table, cite_id=1)
+            table_ent_names = [e["name"] for e in table_ents]
+
+            banned_table_headers = [
+                "Primary Citation", "Milestone / Event", "Empirical Outcome",
+                "Official / Baseline Claim", "Technical Appendix", "Preliminary Study",
+                "Milestone", "Event", "Empirical", "Outcome", "Primary", "Citation",
+            ]
+            found_headers = [n for n in table_ent_names if any(h.lower() == n.lower() for h in banned_table_headers)]
+            if found_headers:
+                raise RuntimeError(f"Knowledge Graph extracted markdown table headers: {found_headers}")
+
+            trailing_junk = [n for n in table_ent_names if any(n.lower().endswith(" " + w) for w in ["the", "is", "still", "and", "or", "of", "in", "to", "with"])]
+            if trailing_junk:
+                raise RuntimeError(f"Knowledge Graph extracted trailing-stopword junk entities: {trailing_junk}")
+
+            copula_junk = [n for n in table_ent_names if any(f" {c} " in f" {n.lower()} " for c in ["is", "are", "was", "were"])]
+            if copula_junk:
+                raise RuntimeError(f"Knowledge Graph extracted broken clause fragments with copulas: {copula_junk}")
 
             # 16.6 Pure Locale English Section Headings Verification
             from core.notebook_synthesis import EPISTEMIC_FRICTION_MANDATE
@@ -1041,11 +1077,18 @@ def run_smoke_test() -> int:
                 if edge.badge_bg and edge.badge_bg.isVisible():
                     raise RuntimeError("KG edge badge remained visible after resetting selection!")
 
-            # Assertion 16.8.3: Physics separation >= 200px
+            # Assertion 16.8.3: Physical node collision boundary enforcement d(A, B) >= R_eff,A + R_eff,B
             nodes_out = kg_layout["nodes"]
             for i in range(len(nodes_out)):
+                r_eff_a = max(24.0, nodes_out[i].get("label_w", 120.0) / 2.0) + 15.0
                 for j in range(i + 1, len(nodes_out)):
+                    r_eff_b = max(24.0, nodes_out[j].get("label_w", 120.0) / 2.0) + 15.0
                     d_sep = ((nodes_out[i]["x"] - nodes_out[j]["x"]) ** 2 + (nodes_out[i]["y"] - nodes_out[j]["y"]) ** 2) ** 0.5
+                    if d_sep < (r_eff_a + r_eff_b):
+                        raise RuntimeError(
+                            f"Physical node collision detected: d={d_sep:.1f}px < (R_a={r_eff_a:.1f} + R_b={r_eff_b:.1f} = {r_eff_a + r_eff_b:.1f}px) "
+                            f"between '{nodes_out[i]['name']}' and '{nodes_out[j]['name']}'"
+                        )
                     if d_sep < 180.0:
                         raise RuntimeError(f"Physics simulation packed nodes too closely ({d_sep:.1f}px < 180px) between {nodes_out[i]['name']} and {nodes_out[j]['name']}")
 

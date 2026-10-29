@@ -196,6 +196,13 @@ class CancellableSynthesisEngine:
         return self.stop_requested.is_set()
 
 
+def __getattr__(name: str) -> Any:
+    if name in ("sanitize_and_validate_entity", "strip_markdown_for_extraction"):
+        import core.knowledge_graph as _kg
+        return getattr(_kg, name)
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+
+
 __all__ = [
     "MAX_GAP_ITERATIONS",
     "CitationRef",
@@ -205,6 +212,8 @@ __all__ = [
     "CancellableSynthesisEngine",
     "COMMON_CAUSAL_TRANSLATIONS",
     "build_localized_graph_mappings",
+    "sanitize_and_validate_entity",
+    "strip_markdown_for_extraction",
     "fast_json_loads",
     "fast_json_dumps",
 ]
