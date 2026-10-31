@@ -426,9 +426,10 @@ def normalize_svg_xml(svg_text: str, width: int, height: int) -> str:
             '</svg>'
         )
 
-    # 1. Strip existing XML prolog and DOCTYPE if present
+    # 1. Strip BOM, XML prolog, DOCTYPE, and illegal XML control characters
     clean_svg = re.sub(r'^\s*<\?xml[^>]*\?>\s*', '', svg_text, flags=re.DOTALL)
     clean_svg = re.sub(r'<!DOCTYPE[^>]*>\s*', '', clean_svg, flags=re.DOTALL)
+    clean_svg = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', clean_svg)
 
     # 2. Extract and rewrite <svg ...> root tag
     svg_tag_match = re.search(r'<svg\b([^>]*)>', clean_svg, flags=re.IGNORECASE)
@@ -467,50 +468,61 @@ def normalize_svg_xml(svg_text: str, width: int, height: int) -> str:
 
     clean_svg = clean_svg[:svg_tag_match.start()] + new_svg_tag + clean_svg[svg_tag_match.end():]
 
-    # 3. Sanitize text tags: convert raw & into &amp; and <br>/<br/> into <tspan>
+    # 3. Sanitize text tags: convert raw <br> or <br/> into <tspan> elements with explicit x and dy
     def _fix_text_tag(match: re.Match) -> str:
         tag_open = match.group(1)
         content = match.group(2)
         tag_close = match.group(3)
 
-        # Convert raw & to &amp; if not already a valid entity
-        content = re.sub(r'&(?!(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)', '&amp;', content)
-
-        # Convert <br> or <br/> into <tspan>
-        if re.search(r'<br\s*/?>', content, flags=re.IGNORECASE):
+        if re.search(r'<\s*br\s*/?\s*>', content, flags=re.IGNORECASE):
             x_match = re.search(r'\bx="([^"]+)"', tag_open)
             x_val = x_match.group(1) if x_match else "0"
-            parts = re.split(r'<br\s*/?>', content, flags=re.IGNORECASE)
-            new_content = parts[0]
-            for p in parts[1:]:
-                new_content += f'<tspan x="{x_val}" dy="1.2em">{p}</tspan>'
-            return f'{tag_open}{new_content}{tag_close}'
-
+            lines = re.split(r'<\s*br\s*/?\s*>', content, flags=re.IGNORECASE)
+            tspan_parts = []
+            for idx, line in enumerate(lines):
+                line_clean = line.strip()
+                if not line_clean:
+                    continue
+                dy = "0" if idx == 0 else "1.2em"
+                tspan_parts.append(f'<tspan x="{x_val}" dy="{dy}">{line_clean}</tspan>')
+            return f'{tag_open}{"".join(tspan_parts)}{tag_close}'
         return f'{tag_open}{content}{tag_close}'
 
     clean_svg = re.sub(r'(<text\b[^>]*>)(.*?)(</text>)', _fix_text_tag, clean_svg, flags=re.DOTALL | re.IGNORECASE)
+    # Strip any stray <br> tags outside text elements
+    clean_svg = re.sub(r'<\s*br\s*/?\s*>', '', clean_svg, flags=re.IGNORECASE)
 
-    # 4. Global check for standalone & outside tags
-    parts = re.split(r'(<[^>]+>)', clean_svg)
-    for i in range(0, len(parts), 2):
-        parts[i] = re.sub(r'&(?!(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)', '&amp;', parts[i])
-    clean_svg = "".join(parts)
+    # 4. Standardize numeric character references into standard named XML entities
+    clean_svg = re.sub(r'&#38;|&#x26;', '&amp;', clean_svg, flags=re.IGNORECASE)
+    clean_svg = re.sub(r'&#60;|&#x3c;', '&lt;', clean_svg, flags=re.IGNORECASE)
+    clean_svg = re.sub(r'&#62;|&#x3e;', '&gt;', clean_svg, flags=re.IGNORECASE)
+    clean_svg = re.sub(r'&#34;|&#x22;', '&quot;', clean_svg, flags=re.IGNORECASE)
+    clean_svg = re.sub(r'&#39;|&#x27;', '&apos;', clean_svg, flags=re.IGNORECASE)
+
+    # 5. Strictly escape ALL bare ampersands across the entire SVG document (both in text and attributes)
+    clean_svg = re.sub(r'&(?!(?:amp|lt|gt|quot|apos);)', '&amp;', clean_svg)
 
     final_svg = f'<?xml version="1.0" encoding="utf-8"?>\n{clean_svg.strip()}'
 
-    # 5. Strict XML validation via ElementTree
+    # 6. Strict XML validation via ElementTree
     try:
         import xml.etree.ElementTree as ET
         ET.fromstring(final_svg)
     except Exception:
-        # Fallback to pristine valid SVG 1.1 if unhandled XML syntax error arose
-        return (
-            '<?xml version="1.0" encoding="utf-8"?>\n'
-            f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
-            f'version="1.1" width="{width}px" height="{height}px" viewBox="0 0 {width} {height}">\n'
-            f'<rect width="100%" height="100%" fill="#0d1117"/>\n'
-            '<text x="50%" y="50%" fill="#94A3B8" font-size="16" font-family="sans-serif" text-anchor="middle">Graph Visual</text>\n'
-            '</svg>'
-        )
+        # Programmatic correction: ensure standard XML structure
+        try:
+            # If a trailing closing tag was missing or mismatched, attempt closing </svg>
+            if not final_svg.rstrip().endswith('</svg>'):
+                final_svg += '\n</svg>'
+            ET.fromstring(final_svg)
+        except Exception:
+            return (
+                '<?xml version="1.0" encoding="utf-8"?>\n'
+                f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+                f'version="1.1" width="{width}px" height="{height}px" viewBox="0 0 {width} {height}">\n'
+                f'<rect width="100%" height="100%" fill="#0d1117"/>\n'
+                '<text x="50%" y="50%" fill="#94A3B8" font-size="16" font-family="sans-serif" text-anchor="middle">Graph Visual</text>\n'
+                '</svg>'
+            )
 
     return final_svg

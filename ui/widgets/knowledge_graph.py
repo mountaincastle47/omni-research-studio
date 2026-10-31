@@ -1036,9 +1036,12 @@ class KnowledgeGraphWidget(QWidget):
                     painter.end()
 
             if target.exists() and target.stat().st_size > 0:
-                svg_txt = target.read_text(encoding="utf-8", errors="replace")
+                raw_bytes = target.read_bytes()
+                if raw_bytes.startswith(b'\xef\xbb\xbf'):
+                    raw_bytes = raw_bytes[3:]
+                svg_txt = raw_bytes.decode("utf-8", errors="replace")
                 normalized_svg = normalize_svg_xml(svg_txt, w, h)
-                target.write_text(normalized_svg, encoding="utf-8")
+                target.write_bytes(normalized_svg.encode("utf-8"))
         except Exception as ex:
             xml_fallback = (
                 '<?xml version="1.0" encoding="utf-8"?>\n'

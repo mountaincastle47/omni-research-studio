@@ -218,7 +218,7 @@ class _CausalEdgeBadgeItem(QGraphicsItem):
     def __init__(self, edge_item: _CausalEdgeGraphicsItem, relation: str) -> None:
         super().__init__()
         self.edge_item = edge_item
-        self.relation = relation.strip()
+        self.relation = sanitize_node_label(relation).strip()
         self.is_edge_label = True
         self.is_edge_badge = True
         self.setZValue(3.0)  # Rendered strictly above lines (Z=1.0) and node cards (Z=2.0)
@@ -264,7 +264,7 @@ class _CausalEdgeBadgeItem(QGraphicsItem):
     def update_text(self, new_relation: str) -> None:
         """Update badge relation label and recompute wrapped dimensions."""
         self.prepareGeometryChange()
-        self.relation = new_relation.strip()
+        self.relation = sanitize_node_label(new_relation).strip()
         self._recompute_dimensions()
         self.update()
 
@@ -826,9 +826,12 @@ class CausalGraphWidget(QWidget):
                     painter.end()
 
             if target.exists() and target.stat().st_size > 0:
-                svg_txt = target.read_text(encoding="utf-8", errors="replace")
+                raw_bytes = target.read_bytes()
+                if raw_bytes.startswith(b'\xef\xbb\xbf'):
+                    raw_bytes = raw_bytes[3:]
+                svg_txt = raw_bytes.decode("utf-8", errors="replace")
                 normalized_svg = normalize_svg_xml(svg_txt, w, h)
-                target.write_text(normalized_svg, encoding="utf-8")
+                target.write_bytes(normalized_svg.encode("utf-8"))
         except Exception as ex:
             xml_fallback = (
                 '<?xml version="1.0" encoding="utf-8"?>\n'

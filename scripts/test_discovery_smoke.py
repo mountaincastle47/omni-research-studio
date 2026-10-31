@@ -933,6 +933,15 @@ def run_smoke_test() -> int:
                 raise RuntimeError("PDF export file was not generated or is too small!")
 
             # 16.4 Graph Vector SVG & Raster Export Verification
+            causal_test_mermaid_amp = (
+                "```mermaid\n"
+                "graph TD\n"
+                '    Root["R&D Failure & Budget Overrun"] -->|"152mm 2-piece ammo & multi-drum auto-loader mechanism failure"| C1["Mass & Avionics Lock"]\n'
+                '    Root -->|"Turret-mounted crew & combustible cartridge ignition cascade"| C2["Disorientation & Cook-Off"]\n'
+                '    C1 -->|"SSN-21 & BMI Structural Failure"| C3["Hull Rupture / Catastrophic Flooding"]\n'
+                "```"
+            )
+            causal_widget.set_markdown_report(causal_test_mermaid_amp)
             causal_widget.export_to_svg(causal_svg_path)
             if not causal_svg_path.exists() or causal_svg_path.stat().st_size < 50:
                 raise RuntimeError("Causal Graph SVG export file was not created or is empty!")
@@ -943,10 +952,14 @@ def run_smoke_test() -> int:
             if not kg_svg_path.exists() or kg_svg_path.stat().st_size < 50:
                 raise RuntimeError("Knowledge Graph SVG export file was not created or is empty!")
 
-            # Assertion 2: Verify SVG 1.1 specification, positive (0,0) origin, standard xmlns, and XML parsing
+            # Assertion 2: Verify SVG 1.1 specification, positive (0,0) origin, standard xmlns, XML parsing, and child graphics bounds
             import xml.etree.ElementTree as ET
+            import xml.sax
             for widget, svg_path in [(causal_widget, causal_svg_path), (kg_widget, kg_svg_path)]:
-                svg_txt = svg_path.read_text(encoding="utf-8")
+                raw_bytes = svg_path.read_bytes()
+                if raw_bytes.startswith(b'\xef\xbb\xbf'):
+                    raise RuntimeError(f"{svg_path.name} contains illegal UTF-8 BOM bytes!")
+                svg_txt = raw_bytes.decode("utf-8")
                 if not svg_txt.lstrip().startswith("<?xml"):
                     raise RuntimeError(f"{svg_path.name} missing XML prolog <?xml ...")
                 if 'xmlns="http://www.w3.org/2000/svg"' not in svg_txt:
@@ -959,6 +972,15 @@ def run_smoke_test() -> int:
                     raise RuntimeError(f"{svg_path.name} missing viewBox attribute")
                 if re.search(r'width="[\d.]+mm"', svg_txt):
                     raise RuntimeError(f"{svg_path.name} contains invalid millimeter width")
+
+                # Verify zero unescaped/bare ampersands
+                bare_amp_match = re.search(r"&(?!(amp|lt|gt|quot|apos);)", svg_txt)
+                if bare_amp_match:
+                    raise RuntimeError(f"{svg_path.name} contains unescaped bare ampersand: {svg_txt[max(0, bare_amp_match.start()-20):min(len(svg_txt), bare_amp_match.end()+20)]}")
+
+                # Verify zero raw <br> or <br/> tags
+                if re.search(r'<\s*br\s*/?\s*>', svg_txt, flags=re.I):
+                    raise RuntimeError(f"{svg_path.name} contains illegal raw <br> tag!")
 
                 # Verify viewBox begins with non-negative origin (0 0 ...)
                 match = re.search(r'viewBox="([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)"', svg_txt)
@@ -974,6 +996,13 @@ def run_smoke_test() -> int:
                     root = tree.getroot()
                 except Exception as ex:
                     raise RuntimeError(f"{svg_path.name} failed strict XML ElementTree parsing: {ex}")
+
+                # Verify SAX parser parses with 0 errors
+                try:
+                    sax_parser = xml.sax.make_parser()
+                    sax_parser.parse(str(svg_path))
+                except Exception as ex:
+                    raise RuntimeError(f"{svg_path.name} failed SAX XML parsing: {ex}")
 
                 # Assert root tag is {http://www.w3.org/2000/svg}svg
                 if root.tag != "{http://www.w3.org/2000/svg}svg":
