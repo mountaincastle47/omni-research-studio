@@ -970,9 +970,34 @@ def run_smoke_test() -> int:
 
                 # Verify Python standard xml.etree.ElementTree.parse parses with 0 errors
                 try:
-                    ET.parse(str(svg_path))
+                    tree = ET.parse(str(svg_path))
+                    root = tree.getroot()
                 except Exception as ex:
                     raise RuntimeError(f"{svg_path.name} failed strict XML ElementTree parsing: {ex}")
+
+                # Assert root tag is {http://www.w3.org/2000/svg}svg
+                if root.tag != "{http://www.w3.org/2000/svg}svg":
+                    raise RuntimeError(f"{svg_path.name} root tag is {root.tag}, expected {{http://www.w3.org/2000/svg}}svg")
+                if root.attrib.get("version") != "1.1":
+                    raise RuntimeError(f"{svg_path.name} root version attribute is not '1.1': {root.attrib.get('version')}")
+
+                # Assert the SVG contains actual graphical child elements and not just <desc> or <title>
+                child_tags = [elem.tag.split("}")[-1] for elem in root.iter()]
+                graphical_tags = [t for t in child_tags if t in ("circle", "path", "polyline", "polygon", "rect", "line")]
+                if len(graphical_tags) < 2:
+                    raise RuntimeError(f"{svg_path.name} contains insufficient graphical elements: {child_tags}")
+                if "text" not in child_tags:
+                    raise RuntimeError(f"{svg_path.name} contains zero <text> elements!")
+
+                # Verify that coordinates / transforms of child elements fall within [0, width] and [0, height]
+                for elem in root.iter():
+                    tr = elem.attrib.get("transform")
+                    if tr:
+                        m_tr = re.match(r"matrix\(([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)\)", tr)
+                        if m_tr:
+                            tx, ty = float(m_tr.group(5)), float(m_tr.group(6))
+                            if tx < -10.0 or ty < -10.0 or tx > vb_w + 50.0 or ty > vb_h + 50.0:
+                                raise RuntimeError(f"{svg_path.name} child element transform ({tx}, {ty}) is outside viewport [0, {vb_w}] x [0, {vb_h}]")
 
             # High-res raster image exports (4K resolution and file size cap verification)
             causal_png_path = export_dir / "causal_graph.png"
