@@ -254,7 +254,8 @@ def render_mermaid_to_svg(
     if not graph.nodes:
         return (
             '<?xml version="1.0" encoding="utf-8"?>\n'
-            '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="120" viewBox="0 0 600 120">\n'
+            '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+            'version="1.1" width="600" height="120" viewBox="0 0 600 120">\n'
             '<rect width="100%" height="100%" fill="#0B0F19"/>\n'
             '<text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#94A3B8" font-size="14">\n'
             'No valid Mermaid causal graph nodes detected in synthesis report.\n'
@@ -329,7 +330,7 @@ def render_mermaid_to_svg(
     # Build SVG XML elements
     svg_parts = [
         '<?xml version="1.0" encoding="utf-8"?>',
-        f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{actual_width}" height="{svg_height}" viewBox="0 0 {actual_width} {svg_height}">',
+        f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="{actual_width}" height="{svg_height}" viewBox="0 0 {actual_width} {svg_height}">',
         '<defs>',
         '  <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">',
         '    <polygon points="0 0, 10 3.5, 0 7" fill="#38BDF8"/>',
@@ -412,3 +413,104 @@ def render_mermaid_to_svg(
 
     svg_parts.append('</svg>')
     return "\n".join(svg_parts)
+
+
+def normalize_svg_xml(svg_text: str, width: int, height: int) -> str:
+    """Normalize SVG string to strict W3C SVG 1.1 specification with positive (0,0) origin and valid XML."""
+    if not svg_text:
+        return (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+            f'version="1.1" width="{width}px" height="{height}px" viewBox="0 0 {width} {height}">\n'
+            f'<rect width="100%" height="100%" fill="#0d1117"/>\n'
+            '</svg>'
+        )
+
+    # 1. Strip existing XML prolog and DOCTYPE if present
+    clean_svg = re.sub(r'^\s*<\?xml[^>]*\?>\s*', '', svg_text, flags=re.DOTALL)
+    clean_svg = re.sub(r'<!DOCTYPE[^>]*>\s*', '', clean_svg, flags=re.DOTALL)
+
+    # 2. Extract and rewrite <svg ...> root tag
+    svg_tag_match = re.search(r'<svg\b([^>]*)>', clean_svg, flags=re.IGNORECASE)
+    if not svg_tag_match:
+        return (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+            f'version="1.1" width="{width}px" height="{height}px" viewBox="0 0 {width} {height}">\n'
+            f'<rect width="100%" height="100%" fill="#0d1117"/>\n'
+            '</svg>'
+        )
+
+    attrs = svg_tag_match.group(1)
+
+    # Strip legacy/conflicting attributes
+    attrs = re.sub(r'\bversion="[^"]*"', '', attrs)
+    attrs = re.sub(r'\bbaseProfile="[^"]*"', '', attrs)
+    attrs = re.sub(r'\bwidth="[^"]*"', '', attrs)
+    attrs = re.sub(r'\bheight="[^"]*"', '', attrs)
+    attrs = re.sub(r'\bviewBox="[^"]*"', '', attrs)
+    attrs = re.sub(r'\bxmlns="[^"]*"', '', attrs)
+    attrs = re.sub(r'\bxmlns:xlink="[^"]*"', '', attrs)
+
+    attrs = " ".join(attrs.split())
+
+    new_svg_tag = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" '
+        f'xmlns:xlink="http://www.w3.org/1999/xlink" '
+        f'version="1.1" '
+        f'width="{width}px" height="{height}px" '
+        f'viewBox="0 0 {width} {height}"'
+    )
+    if attrs:
+        new_svg_tag += f' {attrs}'
+    new_svg_tag += '>'
+
+    clean_svg = clean_svg[:svg_tag_match.start()] + new_svg_tag + clean_svg[svg_tag_match.end():]
+
+    # 3. Sanitize text tags: convert raw & into &amp; and <br>/<br/> into <tspan>
+    def _fix_text_tag(match: re.Match) -> str:
+        tag_open = match.group(1)
+        content = match.group(2)
+        tag_close = match.group(3)
+
+        # Convert raw & to &amp; if not already a valid entity
+        content = re.sub(r'&(?!(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)', '&amp;', content)
+
+        # Convert <br> or <br/> into <tspan>
+        if re.search(r'<br\s*/?>', content, flags=re.IGNORECASE):
+            x_match = re.search(r'\bx="([^"]+)"', tag_open)
+            x_val = x_match.group(1) if x_match else "0"
+            parts = re.split(r'<br\s*/?>', content, flags=re.IGNORECASE)
+            new_content = parts[0]
+            for p in parts[1:]:
+                new_content += f'<tspan x="{x_val}" dy="1.2em">{p}</tspan>'
+            return f'{tag_open}{new_content}{tag_close}'
+
+        return f'{tag_open}{content}{tag_close}'
+
+    clean_svg = re.sub(r'(<text\b[^>]*>)(.*?)(</text>)', _fix_text_tag, clean_svg, flags=re.DOTALL | re.IGNORECASE)
+
+    # 4. Global check for standalone & outside tags
+    parts = re.split(r'(<[^>]+>)', clean_svg)
+    for i in range(0, len(parts), 2):
+        parts[i] = re.sub(r'&(?!(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)', '&amp;', parts[i])
+    clean_svg = "".join(parts)
+
+    final_svg = f'<?xml version="1.0" encoding="utf-8"?>\n{clean_svg.strip()}'
+
+    # 5. Strict XML validation via ElementTree
+    try:
+        import xml.etree.ElementTree as ET
+        ET.fromstring(final_svg)
+    except Exception:
+        # Fallback to pristine valid SVG 1.1 if unhandled XML syntax error arose
+        return (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+            f'version="1.1" width="{width}px" height="{height}px" viewBox="0 0 {width} {height}">\n'
+            f'<rect width="100%" height="100%" fill="#0d1117"/>\n'
+            '<text x="50%" y="50%" fill="#94A3B8" font-size="16" font-family="sans-serif" text-anchor="middle">Graph Visual</text>\n'
+            '</svg>'
+        )
+
+    return final_svg

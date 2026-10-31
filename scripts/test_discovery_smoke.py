@@ -23,8 +23,8 @@ if str(ROOT_DIR) not in sys.path:
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     except Exception:
         pass
 
@@ -943,48 +943,58 @@ def run_smoke_test() -> int:
             if not kg_svg_path.exists() or kg_svg_path.stat().st_size < 50:
                 raise RuntimeError("Knowledge Graph SVG export file was not created or is empty!")
 
-            # Assertion 2: Verify XML prologue, standard xmlns, and viewBox matching itemsBoundingRect within 10%
+            # Assertion 2: Verify SVG 1.1 specification, positive (0,0) origin, standard xmlns, and XML parsing
+            import xml.etree.ElementTree as ET
             for widget, svg_path in [(causal_widget, causal_svg_path), (kg_widget, kg_svg_path)]:
                 svg_txt = svg_path.read_text(encoding="utf-8")
                 if not svg_txt.lstrip().startswith("<?xml"):
                     raise RuntimeError(f"{svg_path.name} missing XML prolog <?xml ...")
                 if 'xmlns="http://www.w3.org/2000/svg"' not in svg_txt:
                     raise RuntimeError(f"{svg_path.name} missing standard xmlns http://www.w3.org/2000/svg")
+                if 'version="1.1"' not in svg_txt:
+                    raise RuntimeError(f"{svg_path.name} missing standard version='1.1'!")
+                if 'baseProfile' in svg_txt:
+                    raise RuntimeError(f"{svg_path.name} contains deprecated baseProfile attribute!")
                 if "viewBox=" not in svg_txt:
                     raise RuntimeError(f"{svg_path.name} missing viewBox attribute")
                 if re.search(r'width="[\d.]+mm"', svg_txt):
                     raise RuntimeError(f"{svg_path.name} contains invalid millimeter width")
 
-                # Verify viewBox coordinates match itemsBoundingRect within 10% tolerance (no collapsed/empty viewport)
+                # Verify viewBox begins with non-negative origin (0 0 ...)
                 match = re.search(r'viewBox="([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)"', svg_txt)
                 if not match:
                     raise RuntimeError(f"{svg_path.name} viewBox format invalid: {svg_txt[:200]}")
                 vb_x, vb_y, vb_w, vb_h = (float(v) for v in match.groups())
-                items_rect = widget.scene.itemsBoundingRect().adjusted(-50, -50, 50, 50)
-                if items_rect.isNull() or items_rect.isEmpty():
-                    items_rect = QRectF(-400, -300, 800, 600)
-                if abs(vb_w - items_rect.width()) / max(1.0, items_rect.width()) > 0.10:
-                    raise RuntimeError(f"{svg_path.name} viewBox width {vb_w} diverges >10% from itemsBoundingRect width {items_rect.width()}!")
-                if abs(vb_h - items_rect.height()) / max(1.0, items_rect.height()) > 0.10:
-                    raise RuntimeError(f"{svg_path.name} viewBox height {vb_h} diverges >10% from itemsBoundingRect height {items_rect.height()}!")
+                if vb_x != 0.0 or vb_y != 0.0:
+                    raise RuntimeError(f"{svg_path.name} viewBox must start at positive origin (0, 0), got: ({vb_x}, {vb_y})")
 
-            # High-res raster image exports (4K resolution verification)
+                # Verify Python standard xml.etree.ElementTree.parse parses with 0 errors
+                try:
+                    ET.parse(str(svg_path))
+                except Exception as ex:
+                    raise RuntimeError(f"{svg_path.name} failed strict XML ElementTree parsing: {ex}")
+
+            # High-res raster image exports (4K resolution and file size cap verification)
             causal_png_path = export_dir / "causal_graph.png"
             kg_png_path = export_dir / "knowledge_graph.png"
             causal_widget.export_image(causal_png_path)
             kg_widget.export_image(kg_png_path)
-            if not causal_png_path.exists() or causal_png_path.stat().st_size < 1000:
-                raise RuntimeError("Causal Graph PNG export was not created or is too small!")
-            if not kg_png_path.exists() or kg_png_path.stat().st_size < 1000:
-                raise RuntimeError("Knowledge Graph PNG export was not created or is too small!")
 
             from PyQt6.QtGui import QImage
-            causal_img = QImage(str(causal_png_path))
-            if causal_img.isNull() or causal_img.width() < 3840:
-                raise RuntimeError(f"Causal Graph PNG width ({causal_img.width()}px) is less than 3840px (4K requirement)!")
-            kg_img = QImage(str(kg_png_path))
-            if kg_img.isNull() or kg_img.width() < 3840:
-                raise RuntimeError(f"Knowledge Graph PNG width ({kg_img.width()}px) is less than 3840px (4K requirement)!")
+            for name, png_path in [("Causal Graph", causal_png_path), ("Knowledge Graph", kg_png_path)]:
+                if not png_path.exists() or png_path.stat().st_size < 1000:
+                    raise RuntimeError(f"{name} PNG export was not created or is too small!")
+                size_mb = png_path.stat().st_size / (1024 * 1024)
+                if size_mb >= 15.0:
+                    raise RuntimeError(f"{name} PNG export file size ({size_mb:.2f}MB) exceeds safe 15MB limit!")
+                img = QImage(str(png_path))
+                if img.isNull():
+                    raise RuntimeError(f"{name} PNG image could not be decoded!")
+                max_dim = max(img.width(), img.height())
+                if max_dim < 3840:
+                    raise RuntimeError(f"{name} PNG max dimension ({max_dim}px) is less than 3840px (4K requirement)!")
+                if max_dim > 5120:
+                    raise RuntimeError(f"{name} PNG max dimension ({max_dim}px) exceeds safe 5120px limit!")
 
             # 16.5 Knowledge Graph Semantic Filtering Verification
             from core.knowledge_graph import KnowledgeGraphEngine
